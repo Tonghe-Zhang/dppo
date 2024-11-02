@@ -2,8 +2,8 @@
 result/
 wandb/
 .vscode/
-data/
-log/
+# data/
+# log/
 logs/
 checkpoints/
 .github/
