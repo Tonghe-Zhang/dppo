@@ -1,0 +1,17 @@
+*.pt
+*.mp4
+*.zip 
+*.csv
+*.rar
+*.gz
+
+__pycache__/
+obsolete/
+video_recording/
+log/
+outputs/
+visualize/
+failed_or_original/
+dataset/
+
+data/
