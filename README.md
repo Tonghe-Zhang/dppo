@@ -1,4 +1,4 @@
-Original repository from DPPO paper:
+Original repository from DPPO paper
 
 # Diffusion Policy Policy Optimization (DPPO)
 
