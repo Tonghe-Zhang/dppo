@@ -1,0 +1,82 @@
+
+PID: 1182715 
+cuda:4
+100 episode, 128 batchsize
+nohup python script/run.py --config-dir=cfg/gym/pretrain/hopper-medium-v2/ --config-name=pre_shortcutflow_mlp device=cuda:3 >/home/zhangtonghe/dppo/analyze/bs128flow-t-bugfix.log 2>&1 &
+
+
+
+PID: 1274643
+cuda:4
+1000 episode, 128 batchsize
+nohup python script/run.py --config-dir=cfg/gym/pretrain/hopper-medium-v2/ --config-name=pre_shortcutflow_mlp device=cuda:2 >/home/zhangtonghe/dppo/analyze/bs128flow-t-bugfix-200.log 2>&1 &
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+nohup python script/run.py --config-name=ft_ppo_diffusion_mlp --config-dir=cfg/gym/finetune/hopper-v2 > hopper_finetune_out.log 2>&1 &
+
+
+
+
+
+
+
+
+process id: 863502
+cuda:7 batchsize=512
+logfile at: /home/zhangtonghe/dppo/analyze/bs512flow.log
+
+
+process id: 867515
+cuda:6 batchsize=128
+logfile at: /home/zhangtonghe/dppo/analyze/bs128flow.log
+
+
+
+
+
+
+
+
+
+
+
+
+
+## GPU: cuda:3
+
+# Tasks
+
+PIN: 153372
+
+nohup python script/run.py --config-name=ft_ppo_diffusion_mlp --config-dir=cfg/gym/finetune/hopper-v2 > hopper_finetune_out.log 2>&1 &
+
+PIN: 153594
+
+nohup python script/run.py --config-name=ft_ppo_diffusion_mlp --config-dir=cfg/gym/finetune/halfcheetah-v2/ > cheetah_finetune_out.log 2>&1 &
+
+## log files
+
+`/home/zhangtonghe/dppo/hopper_finetune_out.log`
+
+`/home/zhangtonghe/dppo/cheetah_finetune_out.log`
+
+## To check output:
+
+tail -f hopper_finetune_out.log
+tail -f cheetah_finetune_out.log
