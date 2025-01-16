@@ -6,7 +6,7 @@ hydra:
 _target_: agent.finetune.train_rlpd_agent.TrainRLPDAgent
 
 name: ${env_name}_rlpd_mlp_ta${horizon_steps}
-logdir: ${oc.env:DPPO_LOG_DIR}/gym-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+logdir: ${oc.env:DPPO_LOG_DIR}/gym/gym-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 normalization_path: ${oc.env:DPPO_DATA_DIR}/gym/${env_name}/normalization.npz
 offline_dataset_path: ${oc.env:DPPO_DATA_DIR}/gym/${env_name}/train.npz
 
@@ -74,7 +74,7 @@ train:
   init_temperature: 1
 
 model:
-  _target_: model.rl.gaussian_rlpd.RLPD_Gaussian
+  _target_: model.gaussian.gaussian_rlpd.RLPD_Gaussian
   randn_clip_value: 10
   tanh_output: True # squash after sampling
   backup_entropy: True

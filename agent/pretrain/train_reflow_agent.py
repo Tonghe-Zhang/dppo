@@ -5,8 +5,7 @@ Pre-training ReFlow policy
 >>> nohup python script/run.py --config-name=pre_reflow_mlp  --config-dir=cfg/gym/pretrain/hopper-medium-v2 >nohup_reflow_1000_traj.log 2>&1 &
 
 """
-import os 
-from tqdm import tqdm as tqdm
+import os
 import logging
 import wandb
 import numpy as np
@@ -74,7 +73,6 @@ class TrainReFlowAgent(PreTrainAgent):
         )
         
         self.env_config=env_config
-
         self.best_reward=0.0
         self.env_name = env_config.name
         env_type = cfg.get("env_type", None)
@@ -111,9 +109,9 @@ class TrainReFlowAgent(PreTrainAgent):
         # Now, replace references to cfg and its parameters with eval_config
         self.n_steps = env_config.n_steps
         self.best_reward_threshold_for_success = env_config.best_reward_threshold_for_success
-        
+        self.schedule_lr_each_grad_step = cfg.get("schedule_lr_each_grad_step", False)
         # Logging, rendering
-        self.logdir = cfg.logdir_eval
+        self.logdir = cfg.logdir
         self.render_dir = os.path.join(self.logdir, "render")
         self.result_path = os.path.join(self.logdir, "result.npz")
         os.makedirs(self.render_dir, exist_ok=True)
@@ -124,7 +122,7 @@ class TrainReFlowAgent(PreTrainAgent):
             self.n_render <= 0 and self.render_video
         ), "Need to set n_render > 0 if saving video"
     
-    
+
     def get_traj_length(self, episodes_start_end):
         """
         Calculates the average value of end - start for a list of tuples.
@@ -308,7 +306,7 @@ class TrainReFlowAgent(PreTrainAgent):
                 
                 act, cond =batch_train
                 
-                (xt, t), v = self.model.generate_target(act, cond)  # here *batch_train = actions, observation, according to StitchedSequenceDataset
+                (xt, t), v = self.model.generate_target(act)  # here *batch_train = actions, observation, according to StitchedSequenceDataset
                 
                 '''
                 xt: Type = <class 'torch.Tensor'>, Shape = torch.Size([128, 4, 3])
@@ -331,6 +329,9 @@ class TrainReFlowAgent(PreTrainAgent):
 
                 self.optimizer.step()
                 
+                if self.schedule_lr_each_grad_step:
+                    self.lr_scheduler.step()
+                
                 loss_train_epoch.append(loss_train.item())
                 if VERBOSE_LOG:
                     print(f"epoch: {epoch}/{self.n_epochs}={epoch/self.n_epochs*100:2.2f}%, steps: {step}, loss: {loss_train.item():3.4}", end="\r")
@@ -346,9 +347,9 @@ class TrainReFlowAgent(PreTrainAgent):
                         batch_val = batch_to_device(batch_val)
                     with torch.no_grad:
                         act, cond = batch_val
-                        (xt, t, obs), v = self.model.generate_target(act, cond['state'])  # here *batch_train = actions, observation, according to StitchedSequenceDataset
+                        (xt, t), v = self.model.generate_target(act)  # here *batch_train = actions, observation, according to StitchedSequenceDataset
 
-                        loss_val= self.model.loss(xt, t, obs, v)
+                        loss_val= self.model.loss(xt, t, cond, v)
                         
                         loss_val_epoch.append(loss_val.item())
                 
@@ -356,7 +357,8 @@ class TrainReFlowAgent(PreTrainAgent):
             loss_val = np.mean(loss_val_epoch) if len(loss_val_epoch) > 0 else None
 
             # update lr
-            self.lr_scheduler.step()
+            if not self.schedule_lr_each_grad_step:
+                self.lr_scheduler.step()
 
             # update ema
             if self.epoch % self.update_ema_freq == 0:

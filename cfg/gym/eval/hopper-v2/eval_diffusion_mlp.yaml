@@ -6,7 +6,7 @@ hydra:
 _target_: agent.eval.eval_diffusion_agent.EvalDiffusionAgent
 
 name: ${env_name}_eval_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
-logdir: ${oc.env:DPPO_LOG_DIR}/gym-eval/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+logdir: ${oc.env:DPPO_LOG_DIR}/gym/gym-eval/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 base_policy_path: ${oc.env:DPPO_LOG_DIR}/gym-pretrain/hopper-medium-v2_pre_diffusion_mlp_ta4_td20/2024-06-12_23-10-05/checkpoint/state_3000.pt
 # /home/zhangtonghe/dppo/log/gym-pretrain/gym-pretrain/hopper-medium-v2_pre_reflow_mlp_ta4_td20/2024-12-08_23-41-42_42/checkpoint/best.pt
 

@@ -1,12 +1,9 @@
 """
 Gaussian policy parameterization.
-
 """
-
 import torch
 import torch.distributions as D
 import logging
-
 log = logging.getLogger(__name__)
 
 
@@ -101,6 +98,7 @@ class GaussianModel(torch.nn.Module):
             sampled_action = dist.rsample()
         else:
             sampled_action = dist.sample()
+        
         sampled_action.clamp_(
             dist.loc - self.randn_clip_value * dist.scale,
             dist.loc + self.randn_clip_value * dist.scale,
@@ -108,7 +106,6 @@ class GaussianModel(torch.nn.Module):
 
         if get_logprob:
             log_prob = dist.log_prob(sampled_action)
-
             # For SAC/RLPD, squash mean after sampling here instead of right after model output as in PPO
             if self.tanh_output:
                 sampled_action = torch.tanh(sampled_action)

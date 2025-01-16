@@ -79,7 +79,7 @@ train:
   update_freq: 2
 
 model:
-  _target_: model.rl.gaussian_ibrl.IBRL_Gaussian
+  _target_: model.gaussian.gaussian_ibrl.IBRL_Gaussian
   randn_clip_value: 3
   n_critics: 5
   soft_action_sample: True

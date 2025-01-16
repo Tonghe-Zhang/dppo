@@ -79,7 +79,7 @@ train:
   init_temperature: 1
 
 model:
-  _target_: model.rl.gaussian_rlpd.RLPD_Gaussian
+  _target_: model.gaussian.gaussian_rlpd.RLPD_Gaussian
   randn_clip_value: 10
   backup_entropy: True
   n_critics: 5

@@ -6,7 +6,7 @@ hydra:
 _target_: agent.finetune.train_dipo_diffusion_agent.TrainDIPODiffusionAgent
 
 name: ${env_name}_dipo_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
-logdir: ${oc.env:DPPO_LOG_DIR}/gym-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+logdir: ${oc.env:DPPO_LOG_DIR}/gym/gym-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 normalization_path: ${oc.env:DPPO_DATA_DIR}/gym/${env_name}/normalization.npz
 
 seed: 42

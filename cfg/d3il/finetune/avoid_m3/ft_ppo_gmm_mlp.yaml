@@ -81,7 +81,7 @@ train:
   target_kl: 1
 
 model:
-  _target_: model.rl.gmm_ppo.PPO_GMM
+  _target_: model.gaussian.gmm_ppo.PPO_GMM
   clip_ploss_coef: 0.1
   network_path: ${base_policy_path}
   actor:

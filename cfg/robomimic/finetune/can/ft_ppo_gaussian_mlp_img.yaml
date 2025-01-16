@@ -91,7 +91,7 @@ train:
   target_kl: 1
 
 model:
-  _target_: model.rl.gaussian_ppo.PPO_Gaussian
+  _target_: model.gaussian.gaussian_ppo.PPO_Gaussian
   clip_ploss_coef: 0.01
   randn_clip_value: 3
   network_path: ${base_policy_path}

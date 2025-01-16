@@ -165,8 +165,10 @@ class PPODiffusion(VPGDiffusion):
 
         # get kl difference and whether value clipped
         with torch.no_grad():
-            # old_approx_kl: the approximate Kullback–Leibler divergence, measured by (-logratio).mean(), which corresponds to the k1 estimator in John Schulman’s blog post on approximating KL http://joschu.net/blog/kl-approx.html
-            # approx_kl: better alternative to old_approx_kl measured by (logratio.exp() - 1) - logratio, which corresponds to the k3 estimator in approximating KL http://joschu.net/blog/kl-approx.html
+            # old_approx_kl: the approximate Kullback–Leibler divergence, measured by (-logratio).mean(), w
+            # hich corresponds to the k1 estimator in John Schulman’s blog post on approximating KL http://joschu.net/blog/kl-approx.html
+            # approx_kl: better alternative to old_approx_kl measured by (logratio.exp() - 1) - logratio, 
+            # which corresponds to the k3 estimator in approximating KL http://joschu.net/blog/kl-approx.html
             # old_approx_kl = (-logratio).mean()
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > clip_ploss_coef).float().mean().item()

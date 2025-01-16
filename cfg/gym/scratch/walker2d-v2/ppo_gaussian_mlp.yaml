@@ -6,7 +6,7 @@ hydra:
 _target_: agent.finetune.train_ppo_gaussian_agent.TrainPPOGaussianAgent
 
 name: ${env_name}_nopre_ppo_gaussian_mlp_ta${horizon_steps}
-logdir: ${oc.env:DPPO_LOG_DIR}/gym-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+logdir: ${oc.env:DPPO_LOG_DIR}/gym/gym-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 normalization_path: ${oc.env:DPPO_DATA_DIR}/gym/${env_name}/normalization.npz
 
 seed: 42
@@ -71,7 +71,7 @@ train:
   target_kl: 1
 
 model:
-  _target_: model.rl.gaussian_ppo.PPO_Gaussian
+  _target_: model.gaussian.gaussian_ppo.PPO_Gaussian
   clip_ploss_coef: 0.1
   randn_clip_value: 3
   #

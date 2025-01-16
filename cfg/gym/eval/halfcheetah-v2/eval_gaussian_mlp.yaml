@@ -6,7 +6,7 @@ hydra:
 _target_: agent.eval.eval_gaussian_agent.EvalGaussianAgent
 
 name: ${env_name}_eval_gaussian_mlp_ta${horizon_steps}
-logdir: ${oc.env:DPPO_LOG_DIR}/gym-eval/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+logdir: ${oc.env:DPPO_LOG_DIR}/gym/gym-eval/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 base_policy_path:
 normalization_path: ${oc.env:DPPO_DATA_DIR}/gym/${env_name}/normalization.npz
 

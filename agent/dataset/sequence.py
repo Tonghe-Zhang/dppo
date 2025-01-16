@@ -47,7 +47,7 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
         horizon_steps=64,
         cond_steps=1,
         img_cond_steps=1,
-        max_n_episodes=0,
+        max_n_episodes=-1,
         use_img=False,
         device="cuda:0",
     ):
@@ -56,7 +56,6 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
         ), "consider using more cond_steps than img_cond_steps"
         
         print(f"max_n_episodes={max_n_episodes}")
-        
         self.horizon_steps = horizon_steps
         self.cond_steps = cond_steps  # states (proprio, etc.)
         self.img_cond_steps = img_cond_steps
@@ -73,10 +72,12 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
                 dataset = pickle.load(f)
         else:
             raise ValueError(f"Unsupported file format: {dataset_path}")
-        traj_lengths = dataset["traj_lengths"][:max_n_episodes]  # 1-D array
         
+        if max_n_episodes == -1:
+            max_n_episodes = len(dataset["traj_lengths"])
+            log.info(f"max_n_episodes specified as -1, fall back to maximum value {max_n_episodes}") 
+        traj_lengths = dataset["traj_lengths"][:max_n_episodes]  # 1-D array
         total_num_steps = np.sum(traj_lengths)
-
         # Set up indices for sampling
         self.indices = self.make_indices(traj_lengths, horizon_steps)
 
@@ -90,7 +91,10 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
         )  # (total_num_steps, action_dim)
 
         log.info(f"Loaded dataset from {dataset_path}")
-        log.info(f"Number of episodes: {min(max_n_episodes, len(traj_lengths))}")
+        n_eps=min(max_n_episodes, len(traj_lengths))
+        if n_eps<=0:
+            raise ValueError(f"number of episodes less than 1, check where is wrong...")
+        log.info(f"Number of episodes: {n_eps}")
         log.info(f"States shape/type: {self.states.shape, self.states.dtype}")
         log.info(f"Actions shape/type: {self.actions.shape, self.actions.dtype}")
         if self.use_img:

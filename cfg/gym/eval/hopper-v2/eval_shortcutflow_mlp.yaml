@@ -6,7 +6,7 @@ hydra:
 _target_: agent.eval.eval_shortcutflow_agent.EvalShortCutFlowAgent
 
 name: ${env_name}_eval_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
-logdir: ${oc.env:DPPO_LOG_DIR}/gym-eval/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+logdir: ${oc.env:DPPO_LOG_DIR}/gym/gym-eval/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 
 base_policy_path: /home/zhangtonghe/dppo/log/gym-pretrain/gym-pretrain/hopper-medium-v2_pre_shortcutflow_mlp_ta4_td16/2024-11-26_17-42-54_42/checkpoint/state_480.pt
 

@@ -23,6 +23,7 @@ class ReFlow(nn.Module):
                  max_denoising_steps, 
                  seed,
                  batch_size,
+                 sample_t_type = 'uniform'
                  ):
         super().__init__()
         if int(max_denoising_steps) <=0:
@@ -33,8 +34,6 @@ class ReFlow(nn.Module):
         
         self.network = network.to(device)
         # TODO: load exising model from network_path ${base_policy_path}
-        
-        
         
         self.device = device
         
@@ -48,13 +47,49 @@ class ReFlow(nn.Module):
         self.max_denoising_steps = int(max_denoising_steps)
         self.batch_size = batch_size
         
+        self.sample_t_type = sample_t_type
         """
         for hopper, 
         self.bootstrap_batchsize=32
         self.flow_batchsize=96
         """
+    def generate_trajectory(self,x1:Tensor, x0:Tensor, t:Tensor):
+        """
+        generate rectified flow trajectory xt= t x1+(1-t) x0
+        """
+        t_broadcast=(torch.ones_like(x1, device=self.device) * t.view(self.batch_size, 1, 1)).to(self.device)
+        
+        xt= t_broadcast* x1 + (1-t_broadcast)* x0
+        
+        return xt
     
-    def generate_target(self, x1:Tensor, cond:dict):
+    def sample_time(self, time_sample_type='uniform', **kwargs):
+        """
+        generate samples of a distribution in [0, 1]
+        
+        """
+        supported_time_sample_type =['uniform', 'logitnormal', 'beta']
+        if time_sample_type=='uniform':
+            return torch.rand(self.batch_size, device=self.device)
+        elif time_sample_type=='logitnormal':
+            m = kwargs.get("m", 0)  # Default mean is 0
+            s = kwargs.get("s", 1)  # Default standard deviation is 1
+            # Generate normal samples
+            normal_samples = torch.normal(mean=m, std=s, size=(self.batch_size,), device=self.device)
+            # Apply the logistic function
+            logit_normal_samples = (1 / (1 + torch.exp(-normal_samples))).to(self.device)
+            
+            return logit_normal_samples
+        elif time_sample_type=='beta':
+            alpha = kwargs.get("alpha", 2.0)  # Default alpha parameter
+            beta = kwargs.get("beta", 2.0)    # Default beta parameter
+            beta_distribution = torch.distributions.Beta(alpha, beta)
+            beta_sample = beta_distribution.sample((self.batch_size,)).to(self.device)
+            return beta_sample
+        else:
+            raise ValueError(f'Unknown time_sample_type = {time_sample_type}. We only support {supported_time_sample_type}')
+        
+    def generate_target(self, x1:Tensor):
         '''
         inputs:
             x1. tensor. real data. torch.Tensor(batch_size, horizon_steps, action_dim)
@@ -75,17 +110,15 @@ class ReFlow(nn.Module):
             v:  tensor. target velocity, from x0 to x1 (v=x1-x0). the desired output of the model. 
         '''
         
-        
-        obs =cond['state']
-        
         # random time, or mixture ratio between (0,1). different for each sample, but he same for each channel. 
-        t=torch.randn(self.batch_size,device=self.device)
-        t_broadcast=(torch.ones_like(x1, device=self.device) * t.view(self.batch_size, 1, 1)).to(self.device)
+        t=self.sample_time(self.sample_t_type)
+        
         # generate random noise
         x0=torch.randn(x1.shape, dtype=torch.float32, device=self.device)
-        # generate corrupted data
         
-        xt= t_broadcast* x1 + (1-t_broadcast)* x0
+        # generate corrupted data
+        xt = self.generate_trajectory(x1, x0, t)
+        
         # generate target
         v =x1-x0
 

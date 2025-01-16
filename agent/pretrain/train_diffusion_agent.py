@@ -7,7 +7,6 @@ Pre-training diffusion policy
 > run this command with VERBOSE_LOG=True to run with debugging information and do not save to wandb
 >>> python script/run.py --config-name=pre_diffusion_mlp  --config-dir=cfg/gym/pretrain/hopper-medium-v2 wandb=null
 
-
 """
 import os 
 from tqdm import tqdm as tqdm
@@ -108,7 +107,7 @@ class TrainDiffusionAgent(PreTrainAgent):
         self.best_reward_threshold_for_success = env_config.best_reward_threshold_for_success
         
         # Logging, rendering
-        self.logdir = cfg.logdir_eval
+        self.logdir = cfg.logdir
         self.render_dir = os.path.join(self.logdir, "render")
         self.result_path = os.path.join(self.logdir, "result.npz")
         os.makedirs(self.render_dir, exist_ok=True)
@@ -174,7 +173,6 @@ class TrainDiffusionAgent(PreTrainAgent):
 
         traj_length = total / count if count > 0 else 0  # Avoid division by zero
         return traj_length
-
 
     def test(self):
         timer = Timer()

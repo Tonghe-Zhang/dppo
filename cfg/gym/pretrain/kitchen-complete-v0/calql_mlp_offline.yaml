@@ -77,7 +77,7 @@ train:
   automatic_entropy_tuning: True
 
 model:
-  _target_: model.rl.gaussian_calql.CalQL_Gaussian
+  _target_: model.gaussian.gaussian_calql.CalQL_Gaussian
   randn_clip_value: 3
   cql_min_q_weight: 5.0
   tanh_output: True
