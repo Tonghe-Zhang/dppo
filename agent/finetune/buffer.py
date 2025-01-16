@@ -67,41 +67,11 @@ class PPOReplayBuffer:
         self.value_trajs = np.empty((self.n_steps, self.n_envs))
         self.logprobs_trajs = np.zeros((self.n_steps, self.n_envs))
         
-    def update(self,obs_venv, critic:torch.nn.Module, get_log_probs):
+    def update(self,obs_venv, critic:torch.nn.Module):
         with torch.no_grad():
-            # self.compute_values(critic)
-            
-            # self.compute_logprobs(get_log_probs)
-
             # normalize reward with running variance
             self.normalize_reward()
-
             self.update_adv_returns(obs_venv, critic)
-    
-    @torch.no_grad
-    def compute_values(self, critic:torch.nn.Module):
-        self.value_trajs = np.empty((self.n_steps, self.n_envs))
-        for t, obs_venv in enumerate(self.obs_trajs["state"]):             # obs_venv: [self.n_envs, self.n_cond_step, self.obs_dim]
-            obs_venv=torch.tensor(obs_venv).float().to(self.device)
-            self.value_trajs[t] = critic.forward(obs_venv).cpu().numpy().flatten()
-    
-    @torch.no_grad
-    def compute_logprobs(self, get_log_probs): 
-        '''
-        get_log_probs: 
-            cond_venv, actions_venv  --> numpy.ndarray
-            where
-                cond_venv: dict
-                actions_venv: numpy.ndarray
-        '''
-        self.logprobs_trajs = np.zeros((self.n_steps, self.n_envs))
-        samples_t = torch.from_numpy(self.samples_trajs).float().to(self.device)
-        obs_t  = torch.from_numpy(self.obs_trajs["state"]).float().to(self.device)
-        
-        for t, (obs_venv, actions_venv) in enumerate(zip(obs_t, samples_t)):
-            cond_venv = {"state": obs_venv}
-            self.logprobs_trajs[t]  = get_log_probs(cond_venv, actions_venv)
-    
     
     def update_full_obs(self):
         if self.save_full_observation:
@@ -213,3 +183,32 @@ class PPOReplayBuffer:
             self.avg_best_reward = 0
             self.success_rate = 0
             log.info("[WARNING] No episode completed within the iteration!")
+            
+            
+            
+            
+    # obsolete code.
+    # @torch.no_grad
+    # def compute_values(self, critic:torch.nn.Module):
+    #     self.value_trajs = np.empty((self.n_steps, self.n_envs))
+    #     for t, obs_venv in enumerate(self.obs_trajs["state"]):             # obs_venv: [self.n_envs, self.n_cond_step, self.obs_dim]
+    #         obs_venv=torch.tensor(obs_venv).float().to(self.device)
+    #         self.value_trajs[t] = critic.forward(obs_venv).cpu().numpy().flatten()
+    
+    # @torch.no_grad
+    # def compute_logprobs(self, get_log_probs): 
+    #     '''
+    #     get_log_probs: 
+    #         cond_venv, actions_venv  --> numpy.ndarray
+    #         where
+    #             cond_venv: dict
+    #             actions_venv: numpy.ndarray
+    #     '''
+    #     self.logprobs_trajs = np.zeros((self.n_steps, self.n_envs))
+    #     samples_t = torch.from_numpy(self.samples_trajs).float().to(self.device)
+    #     obs_t  = torch.from_numpy(self.obs_trajs["state"]).float().to(self.device)
+        
+    #     for t, (obs_venv, actions_venv) in enumerate(zip(obs_t, samples_t)):
+    #         cond_venv = {"state": obs_venv}
+    #         self.logprobs_trajs[t]  = get_log_probs(cond_venv, actions_venv)
+    

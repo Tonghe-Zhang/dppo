@@ -4,10 +4,10 @@ PPO training for Gaussian/GMM policy.
 import torch
 import logging
 log = logging.getLogger(__name__)
-
-
 from agent.finetune.train_ppo_agent import TrainPPOAgent
 from agent.finetune.buffer import PPOReplayBuffer
+from typing import Tuple
+import numpy as np
 
 class TrainPPOGaussianAgent(TrainPPOAgent):
     def __init__(self, cfg):
@@ -28,18 +28,38 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
                                       reward_scale_const = self.reward_scale_const,
                                       device=self.device)
     
-    def get_log_probs(self, cond, action):
-        return self.model.get_logprobs(cond, action)[0].cpu().numpy()
-     
-    def update_step(self, batch):
+    @torch.no_grad
+    def get_samples_logprobs(self, cond:dict)->Tuple[np.ndarray, np.ndarray]:
         '''
-        batch: 
-        {"state": obs[minibatch_idx]},
-        samples[minibatch_idx]          : torch.Tensor(minibatch_size, n_act_steps, act_dim)
-        returns[minibatch_idx],
-        values[minibatch_idx],
-        advantages[minibatch_idx],
-        logprobs[minibatch_idx]]
+        input:
+            cond: dict, which contains conda["state"]: torch.Tensor(self.n_envs, self.n_cond_steps, self.obs_dim)
+        output:
+            action_samples: self.n_envs x self.horizon_steps x self.act_dim
+            logprob_venv:   self.n_envs x self.horizon_steps
+        in order to accomodate mujoco simulator, we return numpy ndarray on cpu. so output are numpy ndarrays
+        '''
+        action_samples = self.model.forward(
+                            cond=cond,
+                            deterministic=self.eval_mode,
+                        )
+        logprob_venv, _, _ = self.model.get_logprobs(cond, action_samples)
+        
+        return action_samples.cpu().numpy(), logprob_venv.cpu().numpy()  
+                        
+    
+    def update_step(self, batch:tuple):
+        '''
+        input: 
+            batch:, a tuple, containing:
+                {"state": obs[minibatch_idx]},  : dict, 
+                samples[minibatch_idx]          : torch.Tensor(minibatch_size, horizon_steps, act_dim)
+                returns[minibatch_idx],
+                values[minibatch_idx],
+                advantages[minibatch_idx],
+                logprobs[minibatch_idx]]
+        output:
+            pg_loss, entropy_loss, v_loss, clipfrac, approx_kl, ratio, bc_loss, std: 
+            float, float, float, float, float, float, float, float
         '''
         
         pg_loss, entropy_loss, v_loss, clipfrac, approx_kl, ratio, bc_loss, std = self.model.loss(*batch, use_bc_loss=self.use_bc_loss)
@@ -59,23 +79,19 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
             for step in range(self.n_steps):
                 with torch.no_grad():
                     value_venv = self.model.critic.forward(torch.tensor(self.prev_obs_venv["state"]).float().to(self.device)).cpu().numpy().flatten()
+                    
                     cond = {
                         "state": torch.from_numpy(self.prev_obs_venv["state"]).float().to(self.device)
                     }
                     
-                    samples = self.model.forward(
-                        cond=cond,
-                        deterministic=self.eval_mode,
-                    )
-                    logprob_venv = self.model.get_logprobs(cond, samples)[0].cpu().numpy()
+                    action_samples, logprob_venv = self.get_samples_logprobs(cond=cond)
                     
-                    output_venv = samples.cpu().numpy()
                 # Apply multi-step action
-                action_venv = output_venv[:, : self.act_steps]
+                action_venv = action_samples[:, : self.act_steps]
                 obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = self.venv.step(action_venv)
                 
                 # save to buffer
-                self.buffer.add(step, self.prev_obs_venv["state"], output_venv, reward_venv,terminated_venv, truncated_venv, value_venv, logprob_venv)
+                self.buffer.add(step, self.prev_obs_venv["state"], action_samples, reward_venv,terminated_venv, truncated_venv, value_venv, logprob_venv)
                 self.buffer.save_full_obs(info_venv)
                 
                 # update for next step
@@ -85,7 +101,7 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
             self.buffer.summarize_episode_reward()
 
             if not self.eval_mode:
-                self.buffer.update(obs_venv, self.model.critic, self.get_log_probs)
+                self.buffer.update(obs_venv, self.model.critic)
                 self.agent_update()
             
             self.plot_state_trajecories() #(only in D3IL)
