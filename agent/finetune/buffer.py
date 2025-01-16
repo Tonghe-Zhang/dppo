@@ -44,12 +44,17 @@ class PPOReplayBuffer:
         self.reward_scale_const = reward_scale_const
         self.device = device
 
-    def add(self, step, state_venv, output_actions_venv, reward_venv, terminated_venv, done_venv):
+    def add(self, step, state_venv, output_actions_venv, reward_venv, terminated_venv, truncated_venv, value_venv, logprob_venv):
+        done_venv = terminated_venv | truncated_venv
+        
         self.obs_trajs["state"][step] = state_venv
         self.samples_trajs[step] = output_actions_venv
         self.reward_trajs[step] = reward_venv
         self.terminated_trajs[step] = terminated_venv
         self.firsts_trajs[step + 1] = done_venv
+        
+        self.value_trajs[step] = value_venv
+        self.logprobs_trajs[step] = logprob_venv
         
     
     def reset(self):
@@ -59,26 +64,28 @@ class PPOReplayBuffer:
         self.terminated_trajs = np.zeros((self.n_steps, self.n_envs))
         self.firsts_trajs = np.zeros((self.n_steps + 1, self.n_envs))
 
-        
+        self.value_trajs = np.empty((self.n_steps, self.n_envs))
+        self.logprobs_trajs = np.zeros((self.n_steps, self.n_envs))
         
     def update(self,obs_venv, critic:torch.nn.Module, get_log_probs):
         with torch.no_grad():
-            self.compute_values(critic)
+            # self.compute_values(critic)
             
-            self.compute_logprobs(get_log_probs)
+            # self.compute_logprobs(get_log_probs)
 
             # normalize reward with running variance
             self.normalize_reward()
 
             self.update_adv_returns(obs_venv, critic)
     
+    @torch.no_grad
     def compute_values(self, critic:torch.nn.Module):
         self.value_trajs = np.empty((self.n_steps, self.n_envs))
         for t, obs_venv in enumerate(self.obs_trajs["state"]):             # obs_venv: [self.n_envs, self.n_cond_step, self.obs_dim]
             obs_venv=torch.tensor(obs_venv).float().to(self.device)
             self.value_trajs[t] = critic.forward(obs_venv).cpu().numpy().flatten()
     
-    
+    @torch.no_grad
     def compute_logprobs(self, get_log_probs): 
         '''
         get_log_probs: 
@@ -105,7 +112,7 @@ class PPOReplayBuffer:
         if self.save_full_observation:
             obs_full_venv = np.array([info["full_obs"]["state"] for info in info_venv])  # n_envs x act_steps x obs_dim
             self.obs_full_trajs = np.vstack((self.obs_full_trajs, obs_full_venv.transpose(1, 0, 2)))
-    
+    @torch.no_grad
     def normalize_reward(self):
         '''
         normalize self.reward_trajs
@@ -116,6 +123,7 @@ class PPOReplayBuffer:
             )
             self.reward_trajs = reward_trajs_transpose.T
     
+    @torch.no_grad
     def update_adv_returns(self, obs_venv, critic:torch.nn.Module): 
         # bootstrap value with GAE if not terminal - apply reward scaling with constant if specified
         obs_venv_ts = {

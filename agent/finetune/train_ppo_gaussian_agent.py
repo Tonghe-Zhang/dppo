@@ -48,9 +48,7 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
      
     
     def run(self):
-        
         self.prepare_run()
-        
         while self.itr < self.n_train_itr:
             self.prepare_video_path()
             self.set_model_mode()
@@ -60,41 +58,39 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
             self.buffer.update_full_obs()
             for step in range(self.n_steps):
                 with torch.no_grad():
+                    value_venv = self.model.critic.forward(torch.tensor(self.prev_obs_venv["state"]).float().to(self.device)).cpu().numpy().flatten()
                     cond = {
                         "state": torch.from_numpy(self.prev_obs_venv["state"]).float().to(self.device)
                     }
+                    
                     samples = self.model.forward(
                         cond=cond,
                         deterministic=self.eval_mode,
                     )
+                    logprob_venv = self.model.get_logprobs(cond, samples)[0].cpu().numpy()
+                    
                     output_venv = samples.cpu().numpy()
-                action_venv = output_venv[:, : self.act_steps]
-
                 # Apply multi-step action
+                action_venv = output_venv[:, : self.act_steps]
                 obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = self.venv.step(action_venv)
-                done_venv = terminated_venv | truncated_venv
                 
+                # save to buffer
+                self.buffer.add(step, self.prev_obs_venv["state"], output_venv, reward_venv,terminated_venv, truncated_venv, value_venv, logprob_venv)
                 self.buffer.save_full_obs(info_venv)
-                self.buffer.add(step, self.prev_obs_venv["state"], output_venv, reward_venv,terminated_venv,done_venv)
                 
                 # update for next step
                 self.prev_obs_venv = obs_venv
-
                 self.cnt_train_step += self.n_envs * self.act_steps if not self.eval_mode else 0 #not acounting for done within action chunk
 
             self.buffer.summarize_episode_reward()
 
-            # Update
             if not self.eval_mode:
                 self.buffer.update(obs_venv, self.model.critic, self.get_log_probs)
                 self.agent_update()
             
             self.plot_state_trajecories() #(only in D3IL)
 
-            # Update lr
-            if self.itr >= self.n_critic_warmup_itr:
-                self.actor_lr_scheduler.step()
-            self.critic_lr_scheduler.step()
+            self.update_lr()
             
             self.save_model()
             

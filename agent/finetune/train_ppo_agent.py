@@ -129,7 +129,9 @@ class TrainPPOAgent(TrainAgent):
         self.actor_lr_scheduler = new_scheduler
         log.info("Reset actor optimizer")
     
-    
+    def update_lr(self):
+        self.critic_lr_scheduler.step()
+        if self.itr >= self.n_critic_warmup_itr: self.actor_lr_scheduler.step()
     
     # appended by Tonghe
     def prepare_video_path(self):
