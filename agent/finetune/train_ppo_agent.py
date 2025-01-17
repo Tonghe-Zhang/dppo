@@ -13,6 +13,7 @@ from agent.finetune.train_agent import TrainAgent
 from util.reward_scaling import RunningRewardScaler
 
 
+########################################################################
 # appended by Tonghe
 import os
 import numpy as np
@@ -21,6 +22,8 @@ import os
 import numpy as np
 import pickle
 import wandb
+########################################################################
+
 class TrainPPOAgent(TrainAgent):
 
     def __init__(self, cfg):
@@ -133,6 +136,8 @@ class TrainPPOAgent(TrainAgent):
         self.critic_lr_scheduler.step()
         if self.itr >= self.n_critic_warmup_itr: self.actor_lr_scheduler.step()
     
+    
+    ########################################################################
     # appended by Tonghe
     def prepare_video_path(self):
         # Prepare video paths for each envs --- only applies for the first set of episodes if allowing reset within iteration and each iteration has multiple episodes from one env
@@ -153,15 +158,21 @@ class TrainPPOAgent(TrainAgent):
         self.run_results = []
         self.cnt_train_step = 0
         self.last_itr_eval = False
-        self.done_venv = np.zeros((1, self.n_envs))
-    def reset_env(self):
+        self.done_venv = np.zeros((1,self.n_envs))
+    
+    def reset_env(self, device='cpu'):
         # Reset env before iteration starts (1) if specified, (2) at eval mode, or (3) right after eval mode
         if self.reset_at_iteration or self.eval_mode or self.last_itr_eval:
             self.prev_obs_venv = self.reset_env_all(options_venv=self.options_venv)
             self.buffer.firsts_trajs[0] = 1
         else:
             # if done at the end of last iteration, the envs are just reset
-            self.buffer.firsts_trajs[0] = self.done_venv
+            if device == 'cpu':
+                self.buffer.firsts_trajs[0] = self.done_venv
+            else:
+                self.buffer.firsts_trajs[0] = torch.from_numpy(self.done_venv).float().to(device)
+            
+    
     def save_model(self):
         """
         overload. 
@@ -192,7 +203,6 @@ class TrainPPOAgent(TrainAgent):
             torch.save(data, os.path.join(self.checkpoint_dir, save_path))
             log.info(f"\n Saved model with the highest evaluated average episode reward {self.current_best_reward:4.3f} to \n{save_path}\n ")
             self.is_best_so_far =False
-    
     def plot_state_trajecories(self): 
         if not self.traj_plotter:
             return 
@@ -204,8 +214,6 @@ class TrainPPOAgent(TrainAgent):
                     render_dir=self.render_dir,
                     itr=self.itr,
                 )
-    
-    
     def update_step(self, batch):
         raise NotImplementedError
     
@@ -216,14 +224,12 @@ class TrainPPOAgent(TrainAgent):
         # Explained variation of future rewards using value function
         explained_var = self.buffer.get_explained_var(values, returns)
         
-        clipfracs = []
+        clipfrac_list = []
         
         # generate a random minibatch of data. 
         for update_epoch in range(self.update_epochs):
             kl_change_too_much = False
-            
             indices = torch.randperm(self.total_steps, device=self.device)
-            
             for start in range(0, self.total_steps, self.batch_size):
                 end = start + self.batch_size
                 minibatch_idx = indices[start:end]
@@ -242,7 +248,7 @@ class TrainPPOAgent(TrainAgent):
                 
                 loss = pg_loss + entropy_loss * self.ent_coef + v_loss * self.vf_coef + bc_loss * self.bc_loss_coeff
                 
-                clipfracs += [clipfrac]
+                clipfrac_list += [clipfrac]
                 
                 # update policy and critic
                 self.actor_optimizer.zero_grad()
@@ -261,11 +267,25 @@ class TrainPPOAgent(TrainAgent):
                     break
             if kl_change_too_much:
                 break
+        clip_frac = np.mean(clipfrac_list)
+        self.train_ret_dict = {
+                "loss": loss,
+                "pg_loss": pg_loss,
+                "v_loss": v_loss,
+                "entropy_loss": entropy_loss,
+                "std": std,
+                "approx_kl": approx_kl,
+                "ratio": ratio,
+                "clip_frac": clip_frac,
+                "explained_var": explained_var,
+            }
+
         
-        self.train_ret_tuple = loss, pg_loss, v_loss, entropy_loss, std, approx_kl, ratio, clipfracs, explained_var
-    
-    
-    def log(self):
+    def log(self, train_prt_str_additional="", train_log_dict_additional={}):
+        '''
+        train_prt_str_additional: str, additional information in training that will be printed to log console that is not included in train_prt_str_basic
+        train_log_dict_additional: dict, additional information in training that will be logged to wandb that is not included in train_log_dict_basic
+        '''
         self.run_results.append(
                 {
                     "itr": self.itr,
@@ -282,7 +302,7 @@ class TrainPPOAgent(TrainAgent):
             self.run_results[-1]["time"] = time
             if self.eval_mode:
                 log.info(
-                    f"Evaluation at self.itr={self.itr}: success rate {self.buffer.success_rate:8.3f} | avg episode reward {self.buffer.avg_episode_reward:8.3f} | avg best reward (per action) {self.buffer.avg_best_reward:8.3f}"
+                    f"Evaluation at self.itr={self.itr}: success rate {self.buffer.success_rate*100:3.3f}% | avg episode reward {self.buffer.avg_episode_reward:8.3f} | avg best reward (per action) {self.buffer.avg_best_reward:8.3f}"
                 )
                 if self.use_wandb:
                     wandb.log(
@@ -290,7 +310,7 @@ class TrainPPOAgent(TrainAgent):
                             "success rate - eval": self.buffer.success_rate,
                             "avg episode reward - eval": self.buffer.avg_episode_reward,
                             "avg best reward - eval": self.buffer.avg_best_reward,
-                            "num episode - eval": self.self.buffer.num_episode_finished,
+                            "num episode - eval": self.buffer.num_episode_finished,
                         },
                         step=self.itr,
                         commit=False,
@@ -304,33 +324,33 @@ class TrainPPOAgent(TrainAgent):
                     self.is_best_so_far = True
                     log.info(f"New best reward evaluated: {self.current_best_reward:4.3f}")
             else:
-                loss, pg_loss, v_loss, entropy_loss, std, approx_kl, ratio, clipfracs, explained_var= self.train_ret_tuple
-                log.info(
-                    f"self.itr={self.itr}: total steps {self.cnt_train_step/1e6:4.3f} M | self.buffer.avg_episode_reward={self.buffer.avg_episode_reward:8.3f} \n |loss {loss:8.3f} | pg loss {pg_loss:8.3f} | value loss {v_loss:8.3f} | ent {-entropy_loss:8.3f} |  t:{time:8.3f}"
-                )
+                # log training losses
+                train_prt_str_basic =f"itr {self.itr}| total step {self.cnt_train_step / 1e6:4.3f} M | episode_reward :{self.buffer.avg_episode_reward:8.3f} |t: {time:8.3f}\n"
+                
+                formatted_items = [f"{key}: {value:.5f}" for key, value in self.train_ret_dict.items()] #loss, pg_loss, v_loss, entropy_loss, std, approx_kl, ratio, clipfracs, explained_var
+                num_items_per_row = 10
+                for i in range(0, len(formatted_items), num_items_per_row):# ten losses in a row
+                    train_prt_str_basic += " | ".join(formatted_items[i:i+num_items_per_row]) + "\n"
+                log.info(train_prt_str_basic + train_prt_str_additional)
+                
+                # log training losses to wandb
                 if self.use_wandb:
-                    wandb.log(
-                        {
+                    train_log_dict_basic = {
                             "total env step": self.cnt_train_step,
-                            "loss": loss,
-                            "pg loss": pg_loss,
-                            "value loss": v_loss,
-                            "entropy loss": -entropy_loss,
-                            "std": std,
-                            "approx kl": approx_kl,
-                            "ratio": ratio,
-                            "clipfrac": np.mean(clipfracs),
-                            "explained variance": explained_var,
                             "avg episode reward - train": self.buffer.avg_episode_reward,
-                            "num episode - train": self.self.buffer.num_episode_finished,
+                            "num episode - train": self.buffer.num_episode_finished,
                             "actor lr": self.actor_optimizer.param_groups[0]["lr"],
                             "critic lr": self.critic_optimizer.param_groups[0]["lr"]
-                        },
+                        }
+                    train_log_dict_basic.update(self.train_ret_dict)
+                    train_log_dict = {**train_log_dict_basic, **(train_log_dict_additional or {})}
+                    wandb.log(
+                        train_log_dict,
                         step=self.itr,
                         commit=True,
                     )
                 self.run_results[-1]["train_episode_reward"] = self.buffer.avg_episode_reward
             with open(self.result_path, "wb") as f:
                 pickle.dump(self.run_results, f)
-                
-                
+  
+    ########################################################################

@@ -9,7 +9,7 @@ import numpy as np
 import pickle
 import wandb
 log = logging.getLogger(__name__)
-from agent.finetune.rl_finetune.finetune_agent import FinetuneAgent
+from agent.finetune.history_version_wrapping_ppo.rl_finetune.finetune_agent import FinetuneAgent
 import os
 from tqdm import tqdm as tqdm
 from model.rl.rl_buffers import PPOReplayBuffer

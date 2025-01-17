@@ -1,18 +1,22 @@
 """
 PPO training for Gaussian/GMM policy.
+Run this line to train a gaussian policy from scratch: 
+
+python script/run.py --config-dir=cfg/gym/scratch/hopper-v2 --config-name=ppo_gaussian_mlp device=cuda:6 wandb=null
 """
 import torch
 import logging
 log = logging.getLogger(__name__)
 from agent.finetune.train_ppo_agent import TrainPPOAgent
-from agent.finetune.buffer import PPOReplayBuffer
+from agent.finetune.buffer import PPOBuffer
 from typing import Tuple
 import numpy as np
+from model.gaussian.gaussian_ppo import PPO_Gaussian
 
 class TrainPPOGaussianAgent(TrainPPOAgent):
     def __init__(self, cfg):
         super().__init__(cfg)
-        self.buffer = PPOReplayBuffer(n_steps=self.n_steps, 
+        self.buffer = PPOBuffer(n_steps=self.n_steps, 
                                       n_envs=self.n_envs,
                                       horizon_steps=self.horizon_steps, 
                                       act_steps= self.act_steps,
@@ -52,7 +56,7 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
         input: 
             batch:, a tuple, containing:
                 {"state": obs[minibatch_idx]},  : dict, 
-                samples[minibatch_idx]          : torch.Tensor(minibatch_size, horizon_steps, act_dim)
+                samples[minibatch_idx]          : torch.Tensor(minibatch_size, horizo_steps, act_dim)
                 returns[minibatch_idx],
                 values[minibatch_idx],
                 advantages[minibatch_idx],
@@ -68,22 +72,20 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
      
     
     def run(self):
+        self.model: PPO_Gaussian
         self.prepare_run()
+        self.buffer.reset() # as long as we put items at the right position in the buffer (determined by 'step'), it means the buffer automatically resets when new itr begins (step =0) so we only need to reset in the beginning. This works only for PPO buffer.
         while self.itr < self.n_train_itr:
             self.prepare_video_path()
             self.set_model_mode()
-            self.buffer.reset()
             self.reset_env()
-            
             self.buffer.update_full_obs()
             for step in range(self.n_steps):
                 with torch.no_grad():
                     value_venv = self.model.critic.forward(torch.tensor(self.prev_obs_venv["state"]).float().to(self.device)).cpu().numpy().flatten()
-                    
                     cond = {
-                        "state": torch.from_numpy(self.prev_obs_venv["state"]).float().to(self.device)
+                        "state": torch.tensor(self.prev_obs_venv["state"], device=self.device, dtype=torch.float32)
                     }
-                    
                     action_samples, logprob_venv = self.get_samples_logprobs(cond=cond)
                     
                 # Apply multi-step action
