@@ -59,6 +59,7 @@ class PPOFlow(nn.Module):
         
         self.report_network_params()
         
+        
         self.action_dim = act_dim
         self.horizon_steps = horizon_steps
         self.act_dim_total = self.horizon_steps * self.action_dim
@@ -69,22 +70,24 @@ class PPOFlow(nn.Module):
         self.cond_steps = cond_steps
         
         self.noise_scheduler_type = noise_scheduler_type
-        self.prepare_noise_levels()
         # we can make noise scheduler learnable. 
         # also we should makes the scheduler return noise that is clipped. 
 
         self.randn_clip_value = randn_clip_value
         # prevent extreme values sampled from gaussian. deviation from mean should stay within `randn_clip_value` times of std.
         
-        # WARNING: NOT IMPLEMENTED YET
+        # Minimum std used in denoising process when sampling action - helps exploration
         self.min_sampling_denoising_std = min_sampling_denoising_std
-        self.min_logprob_denoising_std  = min_logprob_denoising_std
+
+        # Minimum std used in calculating denoising logprobs - for stability
+        self.min_logprob_denoising_std = min_logprob_denoising_std
         
         self.clip_ploss_coef = clip_ploss_coef
         self.clip_ploss_coef_base = clip_ploss_coef_base
         self.clip_ploss_coef_rate = clip_ploss_coef_rate
         self.clip_vloss_coef = clip_vloss_coef
         
+        self.set_logprob_noise_levels()
         
     def report_network_params(self):
         logging.info(
@@ -106,23 +109,25 @@ class PPOFlow(nn.Module):
     def stochastic_interpolate(self,t, device='cpu'):
         if self.noise_scheduler_type == 'vp':
             a = 2.0
-            with torch.no_grad:
-                std = torch.sqrt(a * t * (1 - t))
-                std = torch.clip(std, min=self.min_sampling_denoising_std)
-        elif self.noise_scheduler_type == 've':
-            pass
-        elif self.noise_scheduler_type == 'learnable':
-            pass
+            std = torch.sqrt(a * t * (1 - t))
         else:
             raise NotImplementedError
+        
         return std.to(self.device) if device != 'cpu' else std
     
     @torch.no_grad()
-    def prepare_noise_levels(self):
-        self.noise_levels = torch.zeros(self.inference_steps, device=self.device)
+    def set_logprob_noise_levels(self):
+        # we use this function to calculate log probabilities faster. 
+        
+        self.logprob_noise_levels = torch.zeros(self.inference_steps, device=self.device)
+        
         steps = torch.linspace(0, 1, self.inference_steps)
+        
         for i, t in enumerate(steps):
-            self.noise_levels[i] = self.stochastic_interpolate(t)
+            self.logprob_noise_levels[i] = self.stochastic_interpolate(t)
+
+        self.logprob_noise_levels = self.logprob_noise_levels.clamp(min=self.min_logprob_denoising_std)
+
     
     def get_logprobs(self, cond:dict, x_chain:Tensor, get_entropy =False, normalize_dimension=False):
         '''
@@ -163,7 +168,7 @@ class PPOFlow(nn.Module):
             chains_vel[:,i] = vt.flatten(-2,-1)                                 # [batchsize, self.horizon_steps x self.act_dim]
         
         chains_mean = chains_prev + chains_vel * dt                             # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
-        chains_stds = self.noise_levels.unsqueeze(0).unsqueeze(-1).expand(B, -1, self.act_dim_total)  # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
+        chains_stds = self.logprob_noise_levels.unsqueeze(0).unsqueeze(-1).expand(B, -1, self.act_dim_total)  # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
         chains_next = x_chain[:, 1:, :, :].flatten(-2,-1)                       # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
         
         chains_dist = Normal(chains_mean, chains_stds)
@@ -230,8 +235,9 @@ class PPOFlow(nn.Module):
             xt += vt* dt
             
             # add noise during training
-            sigma_t = self.stochastic_interpolate(t).unsqueeze(-1).unsqueeze(-1).repeat(1, *xt.shape[1:])
-            dist = Normal(xt, sigma_t)
+            std = self.stochastic_interpolate(t).unsqueeze(-1).unsqueeze(-1).repeat(1, *xt.shape[1:])
+            std = torch.clamp(std, min=self.min_sampling_denoising_std)
+            dist = Normal(xt, std)
             if not eval_mode:
                 xt = dist.sample().clamp_(dist.loc - self.randn_clip_value * dist.scale,
                                           dist.loc + self.randn_clip_value * dist.scale).to(self.device)
@@ -279,12 +285,11 @@ class PPOFlow(nn.Module):
         
         newlogprobs, entropy= self.get_logprobs(obs, chains, get_entropy=True, normalize_dimension=normalize_dimension)
         
-        print(f"newlogprobs.min={newlogprobs.min()}, max={newlogprobs.max()}")
-        print(f"oldlogprobs.min={oldlogprobs.min()}, max={oldlogprobs.max()}")
+        log.info(f"newlogprobs.min={newlogprobs.min():5.3f}, max={newlogprobs.max():5.3f}, std={newlogprobs.std():5.3f}")
+        log.info(f"oldlogprobs.min={oldlogprobs.min():5.3f}, max={oldlogprobs.max():5.3f}, std={newlogprobs.std():5.3f}")
         
-        
-        newlogprobs = newlogprobs.clamp(min=-5, max=2)
-        oldlogprobs = oldlogprobs.clamp(min=-5, max=2)
+        # newlogprobs = newlogprobs.clamp(min=-5, max=2)
+        # oldlogprobs = oldlogprobs.clamp(min=-5, max=2)
         
         # batch normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -309,7 +314,7 @@ class PPOFlow(nn.Module):
             v_clipped = torch.clamp(newvalues, oldvalues -self.clip_vloss_coef, oldvalues + self.clip_vloss_coef)
             v_loss = 0.5 *torch.max((newvalues - returns) ** 2, (v_clipped - returns) ** 2).mean()
         
-        # entropy loss
+        # Entropy loss
         entropy_loss = -entropy.mean()
         
         # bc loss

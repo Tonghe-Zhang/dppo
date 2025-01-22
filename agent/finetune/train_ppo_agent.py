@@ -7,10 +7,10 @@ from typing import Optional
 import torch
 import logging
 from util.scheduler import CosineAnnealingWarmupRestarts
-
 log = logging.getLogger(__name__)
 from agent.finetune.train_agent import TrainAgent
 from util.reward_scaling import RunningRewardScaler
+from util.logging import create_bordered_text
 
 
 ########################################################################
@@ -298,9 +298,12 @@ class TrainPPOAgent(TrainAgent):
             time = self.timer()
             self.run_results[-1]["time"] = time
             if self.eval_mode:
-                log.info(
-                    f"Evaluation at self.itr={self.itr}: success rate {self.buffer.success_rate*100:3.3f}% | avg episode reward {self.buffer.avg_episode_reward:8.3f} | avg best reward (per action) {self.buffer.avg_best_reward:8.3f}"
-                )
+                log.info(create_bordered_text(
+                    f"Evaluation at self.itr={self.itr}:\n"
+                    f"success rate {self.buffer.success_rate*100:3.3f}%\n"
+                    f"avg episode reward {self.buffer.avg_episode_reward:8.3f}\n"
+                    f"avg best reward (per action) {self.buffer.avg_best_reward:8.3f}"
+                ))
                 if self.use_wandb:
                     wandb.log(
                         {

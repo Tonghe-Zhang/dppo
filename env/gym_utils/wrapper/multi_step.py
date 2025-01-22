@@ -144,7 +144,7 @@ class MultiStep(gym.Wrapper):
             self.cnt += 1
             if terminated or truncated:
                 break
-
+            
             # done does not differentiate terminal and truncation
             observation, reward, done, info = self.env.step(act)
 

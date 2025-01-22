@@ -53,13 +53,14 @@ class TrainPPOFlowAgent(TrainPPOAgent):
     
     @torch.no_grad()
     def get_samples_logprobs(self, cond:dict, ret_device='cpu', save_chains=True, normalize_dimension=False):
+        # returns: action_samples are still numpy because mujoco engine receives np.
         if save_chains:
             action_samples, chains_venv, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains,normalize_dimension=normalize_dimension)        # n_envs , horizon_steps , act_dim
             return action_samples.cpu().numpy(), chains_venv.cpu().numpy() if ret_device=='cpu' else chains_venv, logprob_venv.cpu().numpy()  if ret_device=='cpu' else logprob_venv
         else:
             action_samples, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains, normalize_dimension=normalize_dimension)
             return action_samples.cpu().numpy(), logprob_venv.cpu().numpy()  if ret_device=='cpu' else logprob_venv
-        # action_samples are still numpy because mujoco engine receives np.
+        
     
     def get_value(self, cond:dict, device='cpu'):
         # cond contains a floating-point torch.tensor on self.device
@@ -79,19 +80,19 @@ class TrainPPOFlowAgent(TrainPPOAgent):
     def update_lr_adaptive_kl(self, approx_kl):
         min_lr = 1e-20
         max_lr = 1e-2
-        tune='maintain'
+        tune='maintains'
         if approx_kl > self.target_kl * 2.0:
             self.actor_lr = max(min_lr, self.actor_lr / 1.5)
             self.critic_lr = max(min_lr, self.critic_lr / 1.5)
-            tune = 'decrease'
+            tune = 'decreases'
         elif 0.0 < approx_kl and approx_kl < self.target_kl / 2.0:
             self.actor_lr = min(max_lr, self.actor_lr * 1.5)
             self.critic_lr = min(max_lr, self.critic_lr * 1.5)
-            tune = 'increase'
+            tune = 'increases'
         for actor_param_group, critic_param_group in zip(self.actor_optimizer.param_groups, self.critic_optimizer.param_groups):
             actor_param_group["lr"] = self.actor_lr
             critic_param_group["lr"] = self.critic_lr
-        log.info(f"""adaptive kl {tune} lr: actor_lr={self.actor_optimizer.param_groups[0]["lr"]}, critic_lr={self.critic_optimizer.param_groups[0]["lr"]}""")
+        log.info(f"""adaptive kl {tune} lr: actor_lr={self.actor_optimizer.param_groups[0]["lr"]:.2e}, critic_lr={self.critic_optimizer.param_groups[0]["lr"]:.2e}""")
         
     def agent_update(self, verbose=True):
         obs, chains, returns, oldvalues, advantages, oldlogprobs = self.buffer.make_dataset()
@@ -124,13 +125,12 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 clipfrac, approx_kl, ratio= self.model.loss(*minibatch, use_bc_loss=self.use_bc_loss, normalize_dimension=self.normalize_entropy_logprob_dim)
                 
                 if verbose:
-                    log.info(f"update_epoch={update_epoch}/{self.update_epochs}, batch_id={batch_id}/{max(1, self.total_steps // self.batch_size)}, ratio={ratio}, clipfrac={clipfrac}, approx_kl={approx_kl}, ratio={ratio}")
+                    log.info(f"update_epoch={update_epoch}/{self.update_epochs}, batch_id={batch_id}/{max(1, self.total_steps // self.batch_size)}, ratio={ratio:.3f}, clipfrac={clipfrac:.3f}, approx_kl={approx_kl:.3f}")
                 
                 if self.target_kl and self.lr_schedule == 'adaptive_kl':
                     self.update_lr_adaptive_kl(approx_kl)
                 
                 loss = pg_loss + entropy_loss * self.ent_coef + v_loss * self.vf_coef + bc_loss * self.bc_coeff
-                
                 
                 clipfracs_list += [clipfrac]
                 
@@ -140,10 +140,11 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 
                 loss.backward()
                 
+                # debug the losses
                 actor_norm = torch.nn.utils.clip_grad_norm_(self.model.actor_ft.parameters(), max_norm=float('inf'))
                 actor_old_norm = torch.nn.utils.clip_grad_norm_(self.model.actor_old.parameters(), max_norm=float('inf'))
                 critic_norm = torch.nn.utils.clip_grad_norm_(self.model.critic.parameters(), max_norm=float('inf'))
-                log.info(f"before clipping: actor_norm={actor_norm}, actor_old_norm={actor_old_norm}, critic_norm={critic_norm}")
+                log.info(f"before clipping: actor_norm={actor_norm:1.2f}, critic_norm={critic_norm:1.2f}, actor_old_norm={actor_old_norm:1.2f}")
                 
                 if self.itr >= self.n_critic_warmup_itr:
                     if self.max_grad_norm:
@@ -157,8 +158,8 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                     break
             if self.lr_schedule=='fixed' and kl_change_too_much:
                 break
+            
         clip_fracs=np.mean(clipfracs_list)
-        
         self.train_ret_dict = {
                     "loss": loss,
                     "pg_loss": pg_loss,
