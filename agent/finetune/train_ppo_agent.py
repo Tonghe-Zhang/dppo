@@ -42,7 +42,6 @@ class TrainPPOAgent(TrainAgent):
         # Warm up period for critic before actor updates
         self.n_critic_warmup_itr = cfg.train.n_critic_warmup_itr
 
-        # Optimizer
         self.actor_optimizer = torch.optim.AdamW(
             self.model.actor_ft.parameters(),
             lr=cfg.train.actor_lr,
@@ -99,9 +98,7 @@ class TrainPPOAgent(TrainAgent):
 
         # Use base policy
         self.use_bc_loss: bool = cfg.train.get("use_bc_loss", False)
-        self.bc_loss_coeff: float = cfg.train.get("bc_loss_coeff", 0)
-        
-        
+        self.bc_coeff: float = cfg.train.get("bc_loss_coeff", 0)
         
         # appended by Tonghe:
         self.current_best_reward = np.float32('-inf')
@@ -246,7 +243,7 @@ class TrainPPOAgent(TrainAgent):
                 # minibatch gradient descent
                 pg_loss, entropy_loss, v_loss, clipfrac, approx_kl, ratio, bc_loss, std = self.update_step(batch) 
                 
-                loss = pg_loss + entropy_loss * self.ent_coef + v_loss * self.vf_coef + bc_loss * self.bc_loss_coeff
+                loss = pg_loss + entropy_loss * self.ent_coef + v_loss * self.vf_coef + bc_loss * self.bc_coeff
                 
                 clipfrac_list += [clipfrac]
                 

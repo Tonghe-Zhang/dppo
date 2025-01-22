@@ -348,7 +348,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                             pg_loss
                             + entropy_loss * self.ent_coef
                             + v_loss * self.vf_coef
-                            + bc_loss * self.bc_loss_coeff
+                            + bc_loss * self.bc_coeff
                         )
                         clipfracs += [clipfrac]
 

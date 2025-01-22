@@ -1,8 +1,7 @@
 """
 DPPO fine-tuning.
 run this line to finetune hopper-v2: 
-python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_diffusion_mlp device=cuda:7 wandb=null
-python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_diffusion_mlp device=cuda:6 wandb=null
+python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:7 wandb=null
 """
 import logging
 log = logging.getLogger(__name__)
@@ -11,38 +10,26 @@ import numpy as np
 import torch
 from util.scheduler import CosineAnnealingWarmupRestarts
 from agent.finetune.train_ppo_agent import TrainPPOAgent
-from model.diffusion.diffusion_ppo import PPODiffusion
-from agent.finetune.buffer import PPODiffusionBuffer, PPODiffusionBufferGPU 
+from flow.ft_ppo.ppoflow import PPOFlow
+from agent.finetune.buffer import PPOFlowBuffer
 # define buffer on cpu or cuda. Currently GPU version is not offering significant acceleration...communication could be a bottleneck. It just increases GPU volatile utilization from 7% to 13%
 
-class TrainPPODiffusionAgent(TrainPPOAgent):
+class TrainPPOFlowAgent(TrainPPOAgent):
     def __init__(self, cfg):
         super().__init__(cfg)
         # Reward horizon --- always set to act_steps for now
         self.reward_horizon = cfg.get("reward_horizon", self.act_steps)
         self.ft_denoising_steps = self.model.ft_denoising_steps
-        # Eta - between DDIM (=0 for eval) and DDPM (=1 for training)
-        self.learn_eta = self.model.learn_eta
-
-        if self.learn_eta:
-            self.eta_update_interval = cfg.train.eta_update_interval
-            self.eta_optimizer = torch.optim.AdamW(
-                self.model.eta.parameters(),
-                lr=cfg.train.eta_lr,
-                weight_decay=cfg.train.eta_weight_decay,
-            )
-            self.eta_lr_scheduler = CosineAnnealingWarmupRestarts(
-                self.eta_optimizer,
-                first_cycle_steps=cfg.train.eta_lr_scheduler.first_cycle_steps,
-                cycle_mult=1.0,
-                max_lr=cfg.train.eta_lr,
-                min_lr=cfg.train.eta_lr_scheduler.min_lr,
-                warmup_steps=cfg.train.eta_lr_scheduler.warmup_steps,
-                gamma=1.0,
-            )
-        self.mode: PPODiffusion
+        self.normalize_entropy_logprob_dim = True # normalize entropy and logprobability over horizon steps and action dimension. so that we don't need to adjust entropy coeff when env scales up. 
+        self.lr_schedule = cfg.train.lr_schedule
+        if self.lr_schedule not in ["fixed", "adaptive_kl"]:
+            raise ValueError("lr_schedule should be 'fixed' or 'adaptive_kl'")
+        self.actor_lr = cfg.train.actor_lr
+        self.critic_lr = cfg.train.critic_lr
         
-        self.buffer = PPODiffusionBuffer(
+        self.mode: PPOFlow
+        
+        self.buffer = PPOFlowBuffer(
             n_steps=self.n_steps,
             n_envs=self.n_envs,
             n_ft_denoising_steps= self.ft_denoising_steps, 
@@ -61,20 +48,18 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
             device=self.device,
         )
     def adjust_finetune_schedule(self):
-        self.model.step()
-        self.diffusion_min_sampling_std = self.model.get_min_sampling_denoising_std()
+        pass
     
-    def get_samples_logprobs(self, cond:dict, device='cpu'):
-        samples = self.model.forward(cond=cond, deterministic=self.eval_mode, return_chain=True)
-        action_samples = samples.trajectories                               # n_envs , horizon_steps , act_dim
-        chains_venv = samples.chains                                        # n_envs , ft_denoising_steps+1 , horizon_steps , act_dim = (40, 11, 4, 3)
-        logprob_venv = self.model.get_logprobs(cond, chains_venv).reshape(self.n_envs, self.ft_denoising_steps, self.horizon_steps, self.action_dim)
-        # get_logprobs returns [(n_envs x ft_denoising_steps) , horizon_steps , act_dim], but we convert it to [n_envs, ft_denoising_steps , horizon_steps , act_dim]
-        
-        if device=='cpu':
-            return action_samples.cpu().numpy(), chains_venv.cpu().numpy(), logprob_venv.cpu().numpy()
+    
+    @torch.no_grad()
+    def get_samples_logprobs(self, cond:dict, ret_device='cpu', save_chains=True, normalize_dimension=False):
+        if save_chains:
+            action_samples, chains_venv, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains,normalize_dimension=normalize_dimension)        # n_envs , horizon_steps , act_dim
+            return action_samples.cpu().numpy(), chains_venv.cpu().numpy() if ret_device=='cpu' else chains_venv, logprob_venv.cpu().numpy()  if ret_device=='cpu' else logprob_venv
         else:
-            return action_samples.cpu().numpy(), chains_venv, logprob_venv  # action_samples are still numpy because mujoco engine receives np.
+            action_samples, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains, normalize_dimension=normalize_dimension)
+            return action_samples.cpu().numpy(), logprob_venv.cpu().numpy()  if ret_device=='cpu' else logprob_venv
+        # action_samples are still numpy because mujoco engine receives np.
     
     def get_value(self, cond:dict, device='cpu'):
         # cond contains a floating-point torch.tensor on self.device
@@ -83,69 +68,94 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
         else:
             value_venv = self.model.critic.forward(cond).squeeze().float().to(self.device)
         return value_venv
-                    
-    def agent_update(self, verbose=False):
-        obs, chains, returns, values, advantages, logprobs = self.buffer.make_dataset()
+    
+    # overload
+    def update_lr(self):
+        if self.target_kl and self.lr_schedule == 'adaptive_kl':   # adapt learning rate according to kl divergence on each minibatch.
+            return
+        else: # use predefined lr scheduler. 
+            super().update_lr()
+    
+    def update_lr_adaptive_kl(self, approx_kl):
+        min_lr = 1e-20
+        max_lr = 1e-2
+        tune='maintain'
+        if approx_kl > self.target_kl * 2.0:
+            self.actor_lr = max(min_lr, self.actor_lr / 1.5)
+            self.critic_lr = max(min_lr, self.critic_lr / 1.5)
+            tune = 'decrease'
+        elif 0.0 < approx_kl and approx_kl < self.target_kl / 2.0:
+            self.actor_lr = min(max_lr, self.actor_lr * 1.5)
+            self.critic_lr = min(max_lr, self.critic_lr * 1.5)
+            tune = 'increase'
+        for actor_param_group, critic_param_group in zip(self.actor_optimizer.param_groups, self.critic_optimizer.param_groups):
+            actor_param_group["lr"] = self.actor_lr
+            critic_param_group["lr"] = self.critic_lr
+        log.info(f"""adaptive kl {tune} lr: actor_lr={self.actor_optimizer.param_groups[0]["lr"]}, critic_lr={self.critic_optimizer.param_groups[0]["lr"]}""")
+        
+    def agent_update(self, verbose=True):
+        obs, chains, returns, oldvalues, advantages, oldlogprobs = self.buffer.make_dataset()
         
         # Explained variation of future rewards using value function
-        explained_var = self.buffer.get_explained_var(values, returns)
+        explained_var = self.buffer.get_explained_var(oldvalues, returns)
         
         # Update policy and critic
         clipfracs_list = []
-        self.total_steps = self.n_steps * self.n_envs * self.ft_denoising_steps   # overload. 500 x 40 x 10 for hopper. 
+        self.total_steps = self.n_steps * self.n_envs
+        
         for update_epoch in range(self.update_epochs):
             kl_change_too_much = False
             indices = torch.randperm(self.total_steps, device=self.device)
             for batch_id, start in enumerate(range(0, self.total_steps, self.batch_size)):
                 end = start + self.batch_size
-                inds_b = indices[start:end]                           # b is for batch
-                batch_inds_b, denoising_inds_b = torch.unravel_index(
-                    inds_b,
-                    (self.n_steps * self.n_envs, self.ft_denoising_steps),
-                )
+                inds_b = indices[start:end]
                 minibatch = (
-                    {"state": obs[batch_inds_b]},                      # obs_b
-                    chains[batch_inds_b, denoising_inds_b],            # chains_prev_b:   self.batch_size x self.horizon_steps x self.act_dim == [50000, 4, 3] for hopper
-                    chains[batch_inds_b, denoising_inds_b + 1],        # chains_next_b:   self.batch_size x self.horizon_steps x self.act_dim == [50000, 4, 3]
-                    denoising_inds_b,                                  # denoising_inds_b
-                    returns[batch_inds_b],                             # returns_b
-                    values[batch_inds_b],                              # values_b
-                    advantages[batch_inds_b],                          # advantages_b
-                    logprobs[batch_inds_b, denoising_inds_b]           # logprobs_b
+                    {"state": obs[inds_b]},
+                    chains[inds_b],
+                    returns[inds_b], 
+                    oldvalues[inds_b],
+                    advantages[inds_b],
+                    oldlogprobs[inds_b] 
                 )
-
+                
                 # minibatch gradient descent
-                self.model: PPODiffusion
-                pg_loss, entropy_loss, v_loss, clipfrac, approx_kl, ratio, bc_loss, eta = self.model.loss(*minibatch, use_bc_loss=self.use_bc_loss, reward_horizon=self.reward_horizon)
+                self.model: PPOFlow
+                pg_loss, entropy_loss, v_loss, bc_loss, \
+                clipfrac, approx_kl, ratio= self.model.loss(*minibatch, use_bc_loss=self.use_bc_loss, normalize_dimension=self.normalize_entropy_logprob_dim)
+                
+                if verbose:
+                    log.info(f"update_epoch={update_epoch}/{self.update_epochs}, batch_id={batch_id}/{max(1, self.total_steps // self.batch_size)}, ratio={ratio}, clipfrac={clipfrac}, approx_kl={approx_kl}, ratio={ratio}")
+                
+                if self.target_kl and self.lr_schedule == 'adaptive_kl':
+                    self.update_lr_adaptive_kl(approx_kl)
                 
                 loss = pg_loss + entropy_loss * self.ent_coef + v_loss * self.vf_coef + bc_loss * self.bc_coeff
-
+                
+                
                 clipfracs_list += [clipfrac]
                 
                 # update policy and critic
                 self.actor_optimizer.zero_grad()
                 self.critic_optimizer.zero_grad()
-                if self.learn_eta:
-                    self.eta_optimizer.zero_grad()
                 
                 loss.backward()
                 
+                actor_norm = torch.nn.utils.clip_grad_norm_(self.model.actor_ft.parameters(), max_norm=float('inf'))
+                actor_old_norm = torch.nn.utils.clip_grad_norm_(self.model.actor_old.parameters(), max_norm=float('inf'))
+                critic_norm = torch.nn.utils.clip_grad_norm_(self.model.critic.parameters(), max_norm=float('inf'))
+                log.info(f"before clipping: actor_norm={actor_norm}, actor_old_norm={actor_old_norm}, critic_norm={critic_norm}")
+                
                 if self.itr >= self.n_critic_warmup_itr:
-                    if self.max_grad_norm is not None:
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.actor_ft.parameters(), self.max_grad_norm
-                        )
+                    if self.max_grad_norm:
+                        torch.nn.utils.clip_grad_norm_(self.model.actor_ft.parameters(), self.max_grad_norm)
                     self.actor_optimizer.step()
-                    if self.learn_eta and batch_id % self.eta_update_interval == 0:
-                        self.eta_optimizer.step()
                 self.critic_optimizer.step()
                 
-                if verbose: log.info(f"update_epoch: {update_epoch}, num_batch: {max(1, self.total_steps // self.batch_size)}, approx_kl: {approx_kl}")
-                
-                if self.target_kl is not None and approx_kl > self.target_kl:
+                if self.lr_schedule=='fixed' and self.target_kl and approx_kl > self.target_kl: # we can also use adaptive KL instead of early stopping.
                     kl_change_too_much = True
+                    log.warning(f"KL change too much, approx_kl ={approx_kl} > {self.target_kl} = target_kl, stop optimization.")
                     break
-            if kl_change_too_much:
+            if self.lr_schedule=='fixed' and kl_change_too_much:
                 break
         clip_fracs=np.mean(clipfracs_list)
         
@@ -155,7 +165,6 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                     "v_loss": v_loss,
                     "entropy_loss": entropy_loss,
                     "bc_loss": bc_loss,
-                    "eta": eta,
                     "approx_kl": approx_kl,
                     "ratio": ratio,
                     "clipfracs": clip_fracs,
@@ -176,7 +185,7 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                         "state": torch.tensor(self.prev_obs_venv["state"], device=self.device, dtype=torch.float32)
                     }
                     value_venv = self.get_value(cond=cond) # for gpu version add , device=self.device
-                    action_samples, chains_venv, logprob_venv = self.get_samples_logprobs(cond=cond) # for gpu version, add , device=self.device
+                    action_samples, chains_venv, logprob_venv = self.get_samples_logprobs(cond=cond, normalize_dimension=self.normalize_entropy_logprob_dim) # for gpu version, add , device=self.device
                 # Apply multi-step action
                 action_venv = action_samples[:, : self.act_steps]
                 obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = self.venv.step(action_venv)
@@ -195,12 +204,10 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
             self.plot_state_trajecories() #(only in D3IL)
 
             self.update_lr()
-            if self.itr >= self.n_critic_warmup_itr and self.learn_eta:
-                self.eta_lr_scheduler.step()
             
-            # update finetune scheduler of Diffusion Policy
+            # update finetune scheduler of ReFlow Policy
             self.adjust_finetune_schedule()
             self.save_model()
-            self.log(train_prt_str_additional=f"diffusion - min sampling std:{self.diffusion_min_sampling_std}")
+            self.log()                                          # diffusion_min_sampling_std
             
             self.itr += 1

@@ -1,4 +1,3 @@
-
 import numpy as np
 import torch
 import logging
@@ -397,4 +396,76 @@ class PPODiffusionBufferGPU(PPODiffusionBuffer):
         explained_var = (float('nan') if var_y == 0 else 1 - ((y_true - y_pred).var().item() / var_y))
         return explained_var  # Returns a floating point number
     
+
+
+
+
+
+class PPOFlowBuffer(PPOBuffer):
+    def __init__(self, 
+                 n_steps,
+                 n_envs, 
+                 n_ft_denoising_steps,
+                 horizon_steps, 
+                 act_steps,
+                 action_dim,
+                 n_cond_step,
+                 obs_dim,
+                 save_full_observation,
+                 furniture_sparse_reward,
+                 best_reward_threshold_for_success,
+                 reward_scale_running,
+                 gamma,
+                 gae_lambda,
+                 reward_scale_const,
+                 device):
+        super().__init__(
+                 n_steps,
+                 n_envs, 
+                 horizon_steps, 
+                 act_steps,
+                 action_dim,
+                 n_cond_step,
+                 obs_dim,
+                 save_full_observation,
+                 furniture_sparse_reward,
+                 best_reward_threshold_for_success,
+                 reward_scale_running,
+                 gamma,
+                 gae_lambda,
+                 reward_scale_const,
+                 device)
+        self.ft_denoising_steps = n_ft_denoising_steps
+    # overload
+    def reset(self):
+        self.obs_trajs = {"state": np.zeros((self.n_steps, self.n_envs, self.n_cond_step, self.obs_dim))}
+        self.chains_trajs = np.zeros((self.n_steps, self.n_envs, self.ft_denoising_steps + 1, self.horizon_steps, self.action_dim))
+        self.reward_trajs = np.zeros((self.n_steps, self.n_envs))
+        self.terminated_trajs = np.zeros((self.n_steps, self.n_envs))
+        self.firsts_trajs = np.zeros((self.n_steps + 1, self.n_envs))
+        
+        self.value_trajs = np.empty((self.n_steps, self.n_envs))
+        self.logprobs_trajs = np.zeros((self.n_steps, self.n_envs))
+    
+    # overload
+    def add(self, step, state_venv, chains_actions_venv, reward_venv, terminated_venv, truncated_venv, value_venv, logprob_venv):
+        self.obs_trajs["state"][step] = state_venv
+        self.chains_trajs[step] = chains_actions_venv
+        self.reward_trajs[step] = reward_venv
+        self.terminated_trajs[step] = terminated_venv
+        self.firsts_trajs[step + 1] = done_venv = terminated_venv | truncated_venv
+        
+        self.value_trajs[step] = value_venv
+        self.logprobs_trajs[step] = logprob_venv
+    
+    # overload
+    def make_dataset(self):
+        obs = torch.tensor(self.obs_trajs["state"], device=self.device).float().flatten(0,1)
+        chains= torch.tensor(self.chains_trajs, device=self.device).float().flatten(0,1)
+        returns = torch.tensor(self.returns_trajs, device=self.device).float().flatten(0,1)
+        values = torch.tensor(self.value_trajs, device=self.device).float().flatten(0,1)
+        advantages = torch.tensor(self.advantages_trajs, device=self.device).float().flatten(0,1)
+        logprobs = torch.tensor(self.logprobs_trajs, device=self.device).float().flatten(0,1)
+
+        return obs, chains, returns, values, advantages, logprobs
     

@@ -81,7 +81,8 @@ class PPODiffusion(VPGDiffusion):
         use_bc_loss: whether to add BC regularization loss
         reward_horizon: action horizon that backpropagates gradient
         """
-        # Get new logprobs for denoising steps from T-1 to 0 - entropy is fixed fod diffusion
+        # Get new logprobs for denoising steps from T-1 to 0 - 
+        # entropy is fixed for diffusion
         newlogprobs, eta = self.get_logprobs_subsample(
             obs,
             chains_prev,
@@ -148,11 +149,11 @@ class PPODiffusion(VPGDiffusion):
         advantages *= discount
         # print(f"after: discount.shape={discount.shape}, advantages.shape={advantages.shape}")# 50,00 = (B,)
 
-        # get ratio
+        # Get ratio
         logratio = newlogprobs - oldlogprobs
         ratio = logratio.exp()
 
-        # exponentially interpolate between the base and the current clipping value over denoising steps and repeat
+        # Exponentially interpolate between the base and the current clipping value over denoising steps and repeat
         t = (denoising_inds.float() / (self.ft_denoising_steps - 1)).to(self.device)
         if self.ft_denoising_steps > 1:
             clip_ploss_coef = self.clip_ploss_coef_base + (
@@ -163,24 +164,24 @@ class PPODiffusion(VPGDiffusion):
         else:
             clip_ploss_coef = t
 
-        # get kl difference and whether value clipped
+        # Get kl difference and whether value clipped
         with torch.no_grad():
-            # old_approx_kl: the approximate Kullback–Leibler divergence, measured by (-logratio).mean(), w
-            # hich corresponds to the k1 estimator in John Schulman’s blog post on approximating KL http://joschu.net/blog/kl-approx.html
+            # old_approx_kl: the approximate Kullback–Leibler divergence, measured by (-logratio).mean(), 
+            # which corresponds to the k1 estimator in John Schulman’s blog post on approximating KL http://joschu.net/blog/kl-approx.html
             # approx_kl: better alternative to old_approx_kl measured by (logratio.exp() - 1) - logratio, 
             # which corresponds to the k3 estimator in approximating KL http://joschu.net/blog/kl-approx.html
             # old_approx_kl = (-logratio).mean()
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > clip_ploss_coef).float().mean().item()
 
-        # Policy loss with clipping
+        # Policy loss
         pg_loss1 = -advantages * ratio
         pg_loss2 = -advantages * torch.clamp(
             ratio, 1 - clip_ploss_coef, 1 + clip_ploss_coef
         )
         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-        # Value loss optionally with clipping
+        # Value loss
         newvalues = self.critic(obs).view(-1)
         if self.clip_vloss_coef is not None:
             v_loss_unclipped = (newvalues - returns) ** 2
@@ -194,6 +195,7 @@ class PPODiffusion(VPGDiffusion):
             v_loss = 0.5 * v_loss_max.mean()
         else:
             v_loss = 0.5 * ((newvalues - returns) ** 2).mean()
+        
         return (
             pg_loss,
             entropy_loss,

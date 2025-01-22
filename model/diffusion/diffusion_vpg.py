@@ -233,7 +233,6 @@ class VPGDiffusion(DiffusionModel):
     ):
         """
         Forward pass for sampling actions.
-
         Args:
             cond: dict with key state/rgb; more recent obs at the end
                 state: (B, To, Do)
@@ -246,6 +245,7 @@ class VPGDiffusion(DiffusionModel):
                 trajectories: (B, Ta, Da)
                 chain: (B, K + 1, Ta, Da)
         """
+        
         device = self.betas.device
         sample_data = cond["state"] if "state" in cond else cond["rgb"]
         B = len(sample_data)
@@ -259,6 +259,7 @@ class VPGDiffusion(DiffusionModel):
             t_all = self.ddim_t
         else:
             t_all = list(reversed(range(self.denoising_steps)))
+            
         chain = [] if return_chain else None
         if not self.use_ddim and self.ft_denoising_steps == self.denoising_steps:
             chain.append(x)
@@ -369,15 +370,9 @@ class VPGDiffusion(DiffusionModel):
             indices = None
 
         # Split chains
-        chains_prev = chains[:, :-1]
-        chains_next = chains[:, 1:]
+        chains_prev = chains[:, :-1].reshape(-1, self.horizon_steps, self.action_dim)
+        chains_next = chains[:, 1:].reshape(-1, self.horizon_steps, self.action_dim)
 
-        # print(f"1 chains_next.shape={chains_next.shape}")
-        # Flatten first two dimensions
-        chains_prev = chains_prev.reshape(-1, self.horizon_steps, self.action_dim)
-        chains_next = chains_next.reshape(-1, self.horizon_steps, self.action_dim)
-
-        # print(f"2 chains_next.shape={chains_next.shape}")
         # Forward pass with previous chains
         next_mean, logvar, eta = self.p_mean_var(
             chains_prev,
@@ -390,10 +385,8 @@ class VPGDiffusion(DiffusionModel):
         std = torch.clip(std, min=self.min_logprob_denoising_std)
         dist = Normal(next_mean, std)
 
-        # print(f"3 chains_next.shape={chains_next.shape}")
-        # Get logprobs with gaussian
         log_prob = dist.log_prob(chains_next)
-        # print(f"log_prob.shape={log_prob.shape}")
+        
         if get_ent:
             return log_prob, eta
         return log_prob
@@ -447,7 +440,7 @@ class VPGDiffusion(DiffusionModel):
         else:
             ddim_indices = None
         
-        # print(f"chains_prev={chains_prev.shape}")
+
         # chains_prev=torch.Size([50000, 4, 3])
         # next_mean=torch.Size([50000, 4, 3])
         # Forward pass with previous chains

@@ -304,7 +304,7 @@ class TrainPPOExactDiffusionAgent(TrainPPODiffusionAgent):
                         loss = (
                             pg_loss
                             + v_loss * self.vf_coef
-                            + bc_loss * self.bc_loss_coeff
+                            + bc_loss * self.bc_coeff
                         )
                         clipfracs += [clipfrac]
 

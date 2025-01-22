@@ -117,7 +117,7 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                 self.model: PPODiffusion
                 pg_loss, entropy_loss, v_loss, clipfrac, approx_kl, ratio, bc_loss, eta = self.model.loss(*minibatch, use_bc_loss=self.use_bc_loss, reward_horizon=self.reward_horizon)
                 
-                loss = pg_loss + entropy_loss * self.ent_coef + v_loss * self.vf_coef + bc_loss * self.bc_loss_coeff
+                loss = pg_loss + entropy_loss * self.ent_coef + v_loss * self.vf_coef + bc_loss * self.bc_coeff
 
                 clipfracs_list += [clipfrac]
                 
