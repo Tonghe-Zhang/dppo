@@ -20,7 +20,8 @@ class TrainPPOFlowAgent(TrainPPOAgent):
         # Reward horizon --- always set to act_steps for now
         self.reward_horizon = cfg.get("reward_horizon", self.act_steps)
         self.ft_denoising_steps = self.model.ft_denoising_steps
-        self.normalize_entropy_logprob_dim = True # normalize entropy and logprobability over horizon steps and action dimension. so that we don't need to adjust entropy coeff when env scales up. 
+        self.normalize_entropy_logprob_dim = True   # normalize entropy and logprobability over horizon steps and action dimension. so that we don't need to adjust entropy coeff when env scales up. 
+        self.normalize_time_horizon = True          # normalize time horizon when calculating the logprob of the markov chain of a single simulated action. 
         self.lr_schedule = cfg.train.lr_schedule
         if self.lr_schedule not in ["fixed", "adaptive_kl"]:
             raise ValueError("lr_schedule should be 'fixed' or 'adaptive_kl'")
@@ -49,16 +50,15 @@ class TrainPPOFlowAgent(TrainPPOAgent):
         )
     def adjust_finetune_schedule(self):
         pass
-    
-    
+
     @torch.no_grad()
-    def get_samples_logprobs(self, cond:dict, ret_device='cpu', save_chains=True, normalize_dimension=False):
+    def get_samples_logprobs(self, cond:dict, ret_device='cpu', save_chains=True, normalize_time_horizon=False, normalize_dimension=False):
         # returns: action_samples are still numpy because mujoco engine receives np.
         if save_chains:
-            action_samples, chains_venv, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains,normalize_dimension=normalize_dimension)        # n_envs , horizon_steps , act_dim
+            action_samples, chains_venv, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains, normalize_time_horizon=normalize_time_horizon, normalize_dimension=normalize_dimension)        # n_envs , horizon_steps , act_dim
             return action_samples.cpu().numpy(), chains_venv.cpu().numpy() if ret_device=='cpu' else chains_venv, logprob_venv.cpu().numpy()  if ret_device=='cpu' else logprob_venv
         else:
-            action_samples, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains, normalize_dimension=normalize_dimension)
+            action_samples, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains, normalize_time_horizon=normalize_time_horizon, normalize_dimension=normalize_dimension)
             return action_samples.cpu().numpy(), logprob_venv.cpu().numpy()  if ret_device=='cpu' else logprob_venv
         
     
@@ -122,10 +122,10 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 # minibatch gradient descent
                 self.model: PPOFlow
                 pg_loss, entropy_loss, v_loss, bc_loss, \
-                clipfrac, approx_kl, ratio= self.model.loss(*minibatch, use_bc_loss=self.use_bc_loss, normalize_dimension=self.normalize_entropy_logprob_dim)
+                clipfrac, approx_kl, ratio= self.model.loss(*minibatch, use_bc_loss=self.use_bc_loss, normalize_time_horizon=self.normalize_time_horizon, normalize_dimension=self.normalize_entropy_logprob_dim)
                 
                 if verbose:
-                    log.info(f"update_epoch={update_epoch}/{self.update_epochs}, batch_id={batch_id}/{max(1, self.total_steps // self.batch_size)}, ratio={ratio:.3f}, clipfrac={clipfrac:.3f}, approx_kl={approx_kl:.3f}")
+                    log.info(f"update_epoch={update_epoch}/{self.update_epochs}, batch_id={batch_id}/{max(1, self.total_steps // self.batch_size)}, ratio={ratio:.3f}, clipfrac={clipfrac:.3f}, approx_kl={approx_kl:.2e}")
                 
                 if self.target_kl and self.lr_schedule == 'adaptive_kl':
                     self.update_lr_adaptive_kl(approx_kl)
@@ -150,6 +150,9 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                     if self.max_grad_norm:
                         torch.nn.utils.clip_grad_norm_(self.model.actor_ft.parameters(), self.max_grad_norm)
                     self.actor_optimizer.step()
+                
+                if self.max_grad_norm:
+                    torch.nn.utils.clip_grad_norm_(self.model.critic.parameters(), self.max_grad_norm)
                 self.critic_optimizer.step()
                 
                 if self.lr_schedule=='fixed' and self.target_kl and approx_kl > self.target_kl: # we can also use adaptive KL instead of early stopping.
@@ -186,7 +189,8 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                         "state": torch.tensor(self.prev_obs_venv["state"], device=self.device, dtype=torch.float32)
                     }
                     value_venv = self.get_value(cond=cond) # for gpu version add , device=self.device
-                    action_samples, chains_venv, logprob_venv = self.get_samples_logprobs(cond=cond, normalize_dimension=self.normalize_entropy_logprob_dim) # for gpu version, add , device=self.device
+                    action_samples, chains_venv, logprob_venv = self.get_samples_logprobs(cond=cond, normalize_time_horizon=self.normalize_time_horizon, normalize_dimension=self.normalize_entropy_logprob_dim) # for gpu version, add , device=self.device
+                
                 # Apply multi-step action
                 action_venv = action_samples[:, : self.act_steps]
                 obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = self.venv.step(action_venv)

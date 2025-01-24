@@ -278,7 +278,7 @@ class TrainPPOAgent(TrainAgent):
             }
 
         
-    def log(self, train_prt_str_additional="", train_log_dict_additional={}):
+    def log(self, train_prt_str_additional="", train_log_dict_additional={}, pad=75):
         '''
         train_prt_str_additional: str, additional information in training that will be printed to log console that is not included in train_prt_str_basic
         train_log_dict_additional: dict, additional information in training that will be logged to wandb that is not included in train_log_dict_basic
@@ -297,12 +297,13 @@ class TrainPPOAgent(TrainAgent):
         if self.itr % self.log_freq == 0:
             time = self.timer()
             self.run_results[-1]["time"] = time
+            
             if self.eval_mode:
                 log.info(create_bordered_text(
-                    f"Evaluation at self.itr={self.itr}:\n"
-                    f"success rate {self.buffer.success_rate*100:3.3f}%\n"
-                    f"avg episode reward {self.buffer.avg_episode_reward:8.3f}\n"
-                    f"avg best reward (per action) {self.buffer.avg_best_reward:8.3f}"
+                    f"Evaluation at itr:{self.itr}:\n"
+                    f"success rate: {self.buffer.success_rate*100:3.3f}%\n"
+                    f"avg episode reward: {self.buffer.avg_episode_reward:8.3f}\n"
+                    f"avg best reward (per action): {self.buffer.avg_best_reward:8.3f}"
                 ))
                 if self.use_wandb:
                     wandb.log(

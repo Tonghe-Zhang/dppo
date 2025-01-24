@@ -15,7 +15,7 @@ device: cuda:7
 env_name: hopper-medium-v2
 obs_dim: 11
 action_dim: 3
-denoising_steps: 20
+denoising_steps: 4 #20
 cond_steps: 1
 horizon_steps: 4
 act_steps: 4
@@ -47,21 +47,21 @@ train:
   n_steps: 500
   gamma: 0.99
 
-  actor_lr: 5e-4
+  actor_lr: 1e-5
 
   actor_weight_decay: 0
   actor_lr_scheduler:
     first_cycle_steps: 1000
     warmup_steps: 10
-    min_lr: 5e-4 #1e-4
+    min_lr: 1e-5  #1e-4 5e-4 #
 
-  critic_lr: 1e-3 #1e-3
+  critic_lr: 5e-4
 
   critic_weight_decay: 0
   critic_lr_scheduler:
     first_cycle_steps: 1000
-    warmup_steps: 0 #10
-    min_lr: 1e-3 #1e-4 #1e-3
+    warmup_steps: 10
+    min_lr: 5e-4              #1e-4 #1e-3
 
   save_model_freq: 100
   val_freq: 10
@@ -73,16 +73,15 @@ train:
   reward_scale_running: True
   reward_scale_const: 1.0
   gae_lambda: 0.95
-  batch_size: 10_000 #50000
+  batch_size: 10_000        #50000
   update_epochs: 5
   vf_coef: 0.5
   ent_coef: 0.01
 
-  target_kl: 0.01 # 1.0
-  lr_schedule: adaptive_kl #fixed
+  target_kl: 1.4e-5         #0.01 #1.0
+  lr_schedule: adaptive_kl  #fixed
 
-  # max_grad_norm: 0.5
-
+  max_grad_norm: 1.0
 
 model:
   _target_: model.flow.ft_ppo.ppoflow.PPOFlow
@@ -111,11 +110,11 @@ model:
   act_max: 1
   obs_dim: ${obs_dim}
   cond_steps: ${cond_steps}
-  noise_scheduler_type: vp
+  noise_scheduler_type: lin #vp
   inference_steps: ${denoising_steps}
   randn_clip_value: 3
-  min_sampling_denoising_std: 0.1
-  min_logprob_denoising_std: 0.1
+  min_sampling_denoising_std: 0.08 #0.1
+  min_logprob_denoising_std: 0.08  #0.1 #1e-20 makes actor loss goes to nan, not sure why yet.
   clip_ploss_coef: 0.01
   clip_ploss_coef_base: 0.01
   clip_ploss_coef_rate: 3

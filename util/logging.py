@@ -1,18 +1,31 @@
 import shutil
-def create_bordered_table(left_column, right_column, border_char='#'):
+def create_bordered_text(text, border_char='#'):
     # Get terminal width
     terminal_width = shutil.get_terminal_size().columns
 
-    # Calculate column widths
-    left_width = terminal_width // 2 - 4  # -4 for '# ' and ' #' on sides
-    right_width = terminal_width - left_width - 4  # -4 for '# ' and ' #' on sides
+    # Split the text into lines
+    lines = text.split('\n')
 
-    # Split the text into lines and center/align each line
-    left_lines = left_column.split('\n')
-    right_lines = right_column.split('\n')
+    # Determine left and right columns
+    left_lines = []
+    right_lines = []
+    for line in lines:
+        if ':' in line:
+            left, right = line.split(':', 1)
+            left_lines.append(left.strip())
+            right_lines.append(right.strip())
+        else:
+            left_lines.append(line.strip())
+            right_lines.append('')
+
+    # Calculate column widths
+    left_width = max(len(line) for line in left_lines) + 2  # +2 for ' :'
+    right_width = max(len(line) for line in right_lines) + 2  # +2 for ': '
+
+    # Format the lines
     formatted_lines = [
-        f"# {left_line.ljust(left_width)} {right_line.rjust(right_width)} #"
-        for left_line, right_line in zip(left_lines, right_lines)
+        f"# {left.ljust(left_width)} {right.rjust(right_width)} #"
+        for left, right in zip(left_lines, right_lines)
     ]
 
     # Create top and bottom borders

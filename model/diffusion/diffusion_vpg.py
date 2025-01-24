@@ -152,6 +152,9 @@ class VPGDiffusion(DiffusionModel):
         else:
             ft_indices = torch.where(t < self.ft_denoising_steps)[0]
 
+        print(f"t={t.shape}, t={t}, self.ft_denoising_steps={self.ft_denoising_steps}, ft_indices={ft_indices}")
+        
+        
         # Use base policy to query expert model, e.g. for imitation loss
         actor = self.actor if use_base_policy else self.actor_ft
 
@@ -159,8 +162,11 @@ class VPGDiffusion(DiffusionModel):
         if len(ft_indices) > 0:
             cond_ft = {key: cond[key][ft_indices] for key in cond}
             noise_ft = actor(x[ft_indices], t[ft_indices], cond=cond_ft)
+            print(f"noise_ft.shape={noise_ft.shape}")
             noise[ft_indices] = noise_ft
 
+        print(f"noise.shape={noise.shape}") # n_envs, horizion_steps, action_dim
+        
         # Predict x_0
         if self.predict_epsilon:
             if self.use_ddim:
@@ -183,6 +189,7 @@ class VPGDiffusion(DiffusionModel):
                 )
         else:  # directly predicting x₀
             x_recon = noise
+        
         if self.denoised_clip_value is not None:
             x_recon.clamp_(-self.denoised_clip_value, self.denoised_clip_value)
             if self.use_ddim:
@@ -192,7 +199,7 @@ class VPGDiffusion(DiffusionModel):
         # Clip epsilon for numerical stability in policy gradient - not sure if this is helpful yet, but the value can be huge sometimes. This has no effect if DDPM is used
         if self.use_ddim and self.eps_clip_value is not None:
             noise.clamp_(-self.eps_clip_value, self.eps_clip_value)
-
+        
         # Get mu
         if self.use_ddim:
             """
@@ -220,6 +227,9 @@ class VPGDiffusion(DiffusionModel):
             )
             logvar = extract(self.ddpm_logvar_clipped, t, x.shape)
             etas = torch.ones_like(mu).to(mu.device)  # always one for DDPM
+        
+        print(f"mu.shape={mu.shape}, logvar.shape={logvar.shape}, etas.shape={etas.shape}")
+        # mu.shape=torch.Size([40, 4, 3]), logvar.shape=torch.Size([40, 1, 1]), etas.shape=torch.Size([40, 4, 3])
         return mu, logvar, etas
 
     # override
@@ -346,7 +356,10 @@ class VPGDiffusion(DiffusionModel):
             .flatten(start_dim=0, end_dim=1)
             for key in cond
         }  # less memory usage than einops?
-
+        #   state:  (B * self.ft_denoising_steps, To, Do)
+        #   rgb:    (B * self.ft_denoising_steps, To, C, H, W)
+        print(f"""cond["state"].shape={cond["state"].shape}""")
+        
         # Repeat t for batch dim, keep it 1-dim
         if self.use_ddim:
             t_single = self.ddim_t[-self.ft_denoising_steps :]
@@ -357,7 +370,12 @@ class VPGDiffusion(DiffusionModel):
                 step=-1,
                 device=self.device,
             )
+        print(f"t_single.shape={t_single.shape}, t_single = {t_single}")
+        
         t_all = t_single.repeat(chains.shape[0], 1).flatten()
+        
+        print(f"t_all.shape={t_all.shape}, t_all={t_all}")
+        
         # 4,3,2,1,0,4,3,2,1,0,...,4,3,2,1,0
         if self.use_ddim:
             indices_single = torch.arange(
@@ -368,7 +386,8 @@ class VPGDiffusion(DiffusionModel):
             indices = indices_single.repeat(chains.shape[0])
         else:
             indices = None
-
+        print(f"indices={indices}")
+        
         # Split chains
         chains_prev = chains[:, :-1].reshape(-1, self.horizon_steps, self.action_dim)
         chains_next = chains[:, 1:].reshape(-1, self.horizon_steps, self.action_dim)
@@ -381,6 +400,7 @@ class VPGDiffusion(DiffusionModel):
             index=indices,
             use_base_policy=use_base_policy,
         )
+        
         std = torch.exp(0.5 * logvar)
         std = torch.clip(std, min=self.min_logprob_denoising_std)
         dist = Normal(next_mean, std)

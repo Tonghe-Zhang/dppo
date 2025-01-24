@@ -108,8 +108,12 @@ class PPOFlow(nn.Module):
     
     def stochastic_interpolate(self,t, device='cpu'):
         if self.noise_scheduler_type == 'vp':
-            a = 2.0
+            a = 0.2 #2.0
             std = torch.sqrt(a * t * (1 - t))
+        elif self.noise_scheduler_type == 'lin':
+            k=0.2
+            b=0.0
+            std = k*t+b
         else:
             raise NotImplementedError
         
@@ -129,7 +133,7 @@ class PPOFlow(nn.Module):
         self.logprob_noise_levels = self.logprob_noise_levels.clamp(min=self.min_logprob_denoising_std)
 
     
-    def get_logprobs(self, cond:dict, x_chain:Tensor, get_entropy =False, normalize_dimension=False):
+    def get_logprobs(self, cond:dict, x_chain:Tensor, get_entropy =False, normalize_time_horizon=False, normalize_dimension=False):
         '''
         inputs:
             x_chain: torch.Tensor of shape `[batchsize, self.inference_steps+1, self.horizon_steps, self.act_dim]`
@@ -183,6 +187,8 @@ class PPOFlow(nn.Module):
         if get_entropy:
             entropy_rate_est = (entropy_init + entropy_trans.sum(-1))/(self.inference_steps + 1) # [batchsize] 
         
+        if normalize_time_horizon:
+            logprob = logprob / (self.inference_steps+1)
         if normalize_dimension:
             return logprob/self.act_dim_total, entropy_rate_est/self.act_dim_total if get_entropy else None
         return logprob, entropy_rate_est if get_entropy else None
@@ -200,7 +206,7 @@ class PPOFlow(nn.Module):
         return xt, log_prob
     
     @torch.no_grad()
-    def get_actions(self, cond:dict, eval_mode:bool, save_chains=False, normalize_dimension=False):
+    def get_actions(self, cond:dict, eval_mode:bool, save_chains=False, normalize_time_horizon=False, normalize_dimension=False):
         '''
         inputs:
             cond: dict, contatinin...
@@ -252,8 +258,10 @@ class PPOFlow(nn.Module):
             if save_chains:
                 x_chain[:, i+1] = xt
         
+        if normalize_time_horizon:
+            log_prob = log_prob/(self.inference_steps+1)
         if normalize_dimension:
-            log_prob /=self.act_dim_total
+            log_prob = log_prob/self.act_dim_total
         return (xt, x_chain, log_prob) if save_chains else (xt, log_prob)
     
     def loss(
@@ -265,6 +273,7 @@ class PPOFlow(nn.Module):
         advantages,
         oldlogprobs,
         use_bc_loss=False,
+        normalize_time_horizon=False,
         normalize_dimension=False
     ):
         """
@@ -283,7 +292,7 @@ class PPOFlow(nn.Module):
         Here, B = n_steps x n_envs
         """
         
-        newlogprobs, entropy= self.get_logprobs(obs, chains, get_entropy=True, normalize_dimension=normalize_dimension)
+        newlogprobs, entropy= self.get_logprobs(obs, chains, get_entropy=True, normalize_time_horizon=normalize_time_horizon,normalize_dimension=normalize_dimension)
         
         log.info(f"newlogprobs.min={newlogprobs.min():5.3f}, max={newlogprobs.max():5.3f}, std={newlogprobs.std():5.3f}")
         log.info(f"oldlogprobs.min={oldlogprobs.min():5.3f}, max={oldlogprobs.max():5.3f}, std={newlogprobs.std():5.3f}")

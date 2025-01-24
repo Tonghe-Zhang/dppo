@@ -2,27 +2,70 @@
 
 
 
+2066073
+
+nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:6 >flowppohopper03.log 2>&1 &
+
+actor_lr: 1e-5
+
+critic_lr: 5e-4
+
+target_kl: 1.4e-5
+
+max_grad_norm: 1.0
+
+
+
+2064705
+
+nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:7 >flowppohopper02.log 2>&1 &
+
+actor_lr: 1e-5
+
+critic_lr: 5e-4
+
+target_kl: 1.4e-5
+
+max_grad_norm: 0.5
+
+###################
+
+2050924
+
+nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:7 >flowppohopper01.log 2>&
+1 &
+
+actor_lr: 1e-5
+
+critic_lr: 1e-4
+
+target_kl: 1.4e-5
+
+
+
+
+#############
 
 
 
 
 
+
+
+
+2051565
+
+nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:7 >flowppohopper00.log 2>&
+
+actor_lr: 5e-4
+
+critic_lr: 1e-3
+
+target_kl: 0.01
 
 400743
 
-ppo 1e-4 lr 
-
-
-
-
-
-
-
-
-
-
-
-
+ppo 1e-4 lr
 
 nohup99.log
 
