@@ -150,52 +150,7 @@ class PPOBuffer:
         var_y = np.var(y_true)
         explained_var = (np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y)
         return explained_var
-    
-    @torch.no_grad
-    def summarize_episode_reward_legacy(self):
-        # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
-        episodes_start_end = []
-        for env_ind in range(self.n_envs):
-            env_steps = np.where(self.firsts_trajs[:, env_ind] == 1)[0]
-            for i in range(len(env_steps) - 1):
-                start = env_steps[i]
-                end = env_steps[i + 1]
-                if end - start > 1:
-                    episodes_start_end.append((env_ind, start, end - 1))
-        if len(episodes_start_end) > 0:
-            reward_trajs_split = [
-                self.reward_trajs[start : end + 1, env_ind]
-                for env_ind, start, end in episodes_start_end
-            ]
-            self.num_episode_finished = len(reward_trajs_split)
-            episode_reward = np.array(
-                [np.sum(reward_traj) for reward_traj in reward_trajs_split]
-            )
-            if (
-                self.furniture_sparse_reward
-            ):  # only for furniture tasks, where reward only occurs in one env step
-                episode_best_reward = episode_reward
-            else:
-                episode_best_reward = np.array(
-                    [
-                        np.max(reward_traj) / self.act_steps
-                        for reward_traj in reward_trajs_split
-                    ]
-                )
-            self.avg_episode_reward = np.mean(episode_reward)
-            self.avg_best_reward = np.mean(episode_best_reward)
-            self.success_rate = np.mean(
-                episode_best_reward >= self.best_reward_threshold_for_success
-            )
-            
-        else:
-            episode_reward = np.array([])
-            self.num_episode_finished = 0
-            self.avg_episode_reward = 0
-            self.avg_best_reward = 0
-            self.success_rate = 0
-            log.info("[WARNING] No episode completed within the iteration!")
-
+   
 
     @torch.no_grad()
     def summarize_episode_reward(self):
@@ -460,11 +415,6 @@ class PPODiffusionBufferGPU(PPODiffusionBuffer):
         explained_var = (float('nan') if var_y == 0 else 1 - ((y_true - y_pred).var().item() / var_y))
         return explained_var  # Returns a floating point number
     
-
-
-
-
-
 class PPOFlowBuffer(PPOBuffer):
     def __init__(self, 
                  n_steps,

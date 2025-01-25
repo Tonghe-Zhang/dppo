@@ -255,14 +255,18 @@ class Gaussian_MLP(nn.Module):
         # flatten history
         state = cond["state"].view(B, -1)
 
-        # mlp
+        # mlp head, an encoder shared by mean and std calculation 
         if hasattr(self, "mlp_base"):
             state = self.mlp_base(state)
+        
+        # get action mean
         out_mean = self.mlp_mean(state)
         if self.tanh_output:
             out_mean = torch.tanh(out_mean)
         out_mean = out_mean.view(B, self.horizon_steps * self.action_dim)
 
+        
+        # get action std
         if self.learn_fixed_std:
             out_logvar = torch.clamp(self.logvar, self.logvar_min, self.logvar_max)
             out_scale = torch.exp(0.5 * out_logvar)
@@ -271,6 +275,7 @@ class Gaussian_MLP(nn.Module):
         elif self.use_fixed_std:
             out_scale = torch.ones_like(out_mean).to(device) * self.fixed_std
         else:
+            # control logvar as a bounded variable in [self.logvar_min, self.logvar_max] without explicitly clipping
             out_logvar = self.mlp_logvar(state).view(
                 B, self.horizon_steps * self.action_dim
             )
@@ -279,4 +284,6 @@ class Gaussian_MLP(nn.Module):
                 out_logvar + 1
             )  # put back to full range
             out_scale = torch.exp(0.5 * out_logvar)
+        
+        
         return out_mean, out_scale

@@ -99,7 +99,7 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
                 # update for next step
                 self.prev_obs_venv = obs_venv
                 self.cnt_train_step += self.n_envs * self.act_steps if not self.eval_mode else 0 #not acounting for done within action chunk
-
+            
             self.buffer.summarize_episode_reward()
 
             if not self.eval_mode:
