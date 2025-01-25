@@ -76,7 +76,7 @@ class CosineAnnealingWarmupRestarts(_LRScheduler):
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = self.min_lr
             self.base_lrs.append(self.min_lr)
-
+    
     def get_lr(self):
         if self.step_in_cycle == -1:
             return self.base_lrs
@@ -145,3 +145,35 @@ class CosineAnnealingWarmupRestarts(_LRScheduler):
         self.last_epoch = math.floor(epoch)
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group["lr"] = lr
+
+import torch
+import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+class WarmupReduceLROnPlateau:
+    def __init__(self, optimizer, warmup_steps, target_lr, mode, min_lr, patience, factor, threshold):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.target_lr = target_lr
+        self.patience = patience
+        self.factor = factor
+        self.threshold = threshold
+        self.scheduler = ReduceLROnPlateau(optimizer, 
+                                           mode=mode, 
+                                           factor=factor, 
+                                            patience=patience, threshold=threshold,
+                                            min_lr = min_lr, 
+                                            verbose=True)
+        self.current_step = 0
+        
+    def step(self, val_metric):
+        if self.current_step < self.warmup_steps:
+            # Warmup phase: Increase learning rate to target_lr
+            warmup_lr = self.target_lr * (self.current_step / self.warmup_steps)
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = warmup_lr
+        else:
+            # After warmup, use ReduceLROnPlateau scheduler
+            self.scheduler.step(val_metric)
+        
+        self.current_step += 1

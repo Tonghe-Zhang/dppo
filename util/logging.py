@@ -33,7 +33,7 @@ def create_bordered_text(text, border_char='#'):
 
     # Construct the final message
     message = (
-        f"{border}\n"
+        f"\n{border}\n"
         + '\n'.join(formatted_lines)
         + f"\n{border}"
     )

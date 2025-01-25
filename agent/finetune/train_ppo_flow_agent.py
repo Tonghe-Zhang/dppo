@@ -71,7 +71,7 @@ class TrainPPOFlowAgent(TrainPPOAgent):
         return value_venv
     
     # overload
-    def update_lr(self):
+    def update_lr(self, val_metric=None):
         if self.target_kl and self.lr_schedule == 'adaptive_kl':   # adapt learning rate according to kl divergence on each minibatch.
             return
         else: # use predefined lr scheduler. 
@@ -181,8 +181,8 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 "new_logprob_min": newlogprob_min,
                 "new_logprob_max": newlogprob_max,
                 "new_logprob_std": newlogprob_std,
-                "actor_lr": self.actor_optimizer.param_groups[0]["lr"],
-                "critic_lr": self.critic_optimizer.param_groups[0]["lr"],
+                "actor lr": self.actor_optimizer.param_groups[0]["lr"],
+                "critic lr": self.critic_optimizer.param_groups[0]["lr"],
             }
     
     def run(self):

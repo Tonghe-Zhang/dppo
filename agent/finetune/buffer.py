@@ -152,7 +152,7 @@ class PPOBuffer:
         return explained_var
     
     @torch.no_grad
-    def summarize_episode_reward(self):
+    def summarize_episode_reward_legacy(self):
         # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
         episodes_start_end = []
         for env_ind in range(self.n_envs):
@@ -187,6 +187,7 @@ class PPOBuffer:
             self.success_rate = np.mean(
                 episode_best_reward >= self.best_reward_threshold_for_success
             )
+            
         else:
             episode_reward = np.array([])
             self.num_episode_finished = 0
@@ -194,6 +195,69 @@ class PPOBuffer:
             self.avg_best_reward = 0
             self.success_rate = 0
             log.info("[WARNING] No episode completed within the iteration!")
+
+
+    @torch.no_grad()
+    def summarize_episode_reward(self):
+        episodes_start_end = []
+        for env_ind in range(self.n_envs):
+            env_steps = np.where(self.firsts_trajs[:, env_ind] == 1)[0]
+            for i in range(len(env_steps) - 1):
+                start = env_steps[i]
+                end = env_steps[i + 1]
+                if end - start > 1:
+                    episodes_start_end.append((env_ind, start, end - 1))
+        
+        if len(episodes_start_end) > 0:
+            reward_trajs_split = [
+                self.reward_trajs[start : end + 1, env_ind]
+                for env_ind, start, end in episodes_start_end
+            ]
+            self.num_episode_finished = len(reward_trajs_split)
+            episode_reward = np.array(
+                [np.sum(reward_traj) for reward_traj in reward_trajs_split]
+            )
+            if self.furniture_sparse_reward:
+                episode_best_reward = episode_reward
+            else:
+                episode_best_reward = np.array(
+                    [
+                        np.max(reward_traj) / self.act_steps
+                        for reward_traj in reward_trajs_split
+                    ]
+                )
+            self.avg_episode_reward = np.mean(episode_reward)
+            self.avg_best_reward = np.mean(episode_best_reward)
+            self.success_rate = np.mean(
+                episode_best_reward >= self.best_reward_threshold_for_success
+            )
+            
+            # Calculate standard deviations
+            self.std_episode_reward = np.std(episode_reward)
+            self.std_best_reward = np.std(episode_best_reward)
+            self.std_success_rate = np.std(
+                episode_best_reward >= self.best_reward_threshold_for_success
+            )
+            
+            # Calculate average length of valid episodes and its standard deviation
+            episode_lengths = np.array([end - start + 1 for _, start, end in episodes_start_end])
+            self.avg_episode_length = np.mean(episode_lengths)
+            self.std_episode_length = np.std(episode_lengths)
+            
+        else:
+            episode_reward = np.array([])
+            self.num_episode_finished = 0
+            self.avg_episode_reward = 0
+            self.avg_best_reward = 0
+            self.success_rate = 0
+            self.avg_episode_length = 0.0
+            self.std_episode_reward = 0
+            self.std_best_reward = 0
+            self.std_success_rate = 0
+            self.std_episode_length = 0.0
+            log.info("[WARNING] No episode completed within the iteration!")
+
+
 
 class PPODiffusionBuffer(PPOBuffer):
     def __init__(self, 

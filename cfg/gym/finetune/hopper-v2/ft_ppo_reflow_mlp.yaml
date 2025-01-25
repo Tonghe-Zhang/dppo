@@ -47,19 +47,21 @@ train:
   n_steps: 500
   gamma: 0.99
 
-  actor_lr: 1e-5
-
+  actor_lr: 3e-5    # 3e-5 gives you maximum of 2,800 reward but may decay afterwards. 
   actor_weight_decay: 0
+
   actor_lr_scheduler:
-    first_cycle_steps: 1000
+    type: cosine
+    first_cycle_steps: 1000   #100    #
     warmup_steps: 10
-    min_lr: 1e-5  #1e-4 5e-4 #
+    min_lr: 1e-5              #1e-4 5e-4 #
 
   critic_lr: 5e-4
-
   critic_weight_decay: 1e-5
+
   critic_lr_scheduler:
-    first_cycle_steps: 1000
+    type: cosine
+    first_cycle_steps: 1000   #100
     warmup_steps: 10
     min_lr: 5e-4              #1e-4 #1e-3
 

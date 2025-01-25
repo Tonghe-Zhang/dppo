@@ -6,7 +6,7 @@ Parent PPO fine-tuning agent class.
 from typing import Optional
 import torch
 import logging
-from util.scheduler import CosineAnnealingWarmupRestarts
+from util.scheduler import CosineAnnealingWarmupRestarts, WarmupReduceLROnPlateau
 log = logging.getLogger(__name__)
 from agent.finetune.train_agent import TrainAgent
 from util.reward_scaling import RunningRewardScaler
@@ -48,32 +48,63 @@ class TrainPPOAgent(TrainAgent):
             weight_decay=cfg.train.actor_weight_decay,
         )
         
-        # use cosine scheduler with linear warmup
-        self.actor_lr_scheduler = CosineAnnealingWarmupRestarts(
-            self.actor_optimizer,
-            first_cycle_steps=cfg.train.actor_lr_scheduler.first_cycle_steps,
-            cycle_mult=1.0,
-            max_lr=cfg.train.actor_lr,
-            min_lr=cfg.train.actor_lr_scheduler.min_lr,
-            warmup_steps=cfg.train.actor_lr_scheduler.warmup_steps,
-            gamma=1.0,
-        )
+        
+        self.actor_lr_type = cfg.train.actor_lr_scheduler.get("type", "cosine")
+        if self.actor_lr_type == "cosine":
+            self.actor_lr_scheduler = CosineAnnealingWarmupRestarts(
+                self.actor_optimizer,
+                first_cycle_steps=cfg.train.actor_lr_scheduler.first_cycle_steps,
+                cycle_mult=1.0,
+                max_lr=cfg.train.actor_lr,
+                min_lr=cfg.train.actor_lr_scheduler.min_lr,
+                warmup_steps=cfg.train.actor_lr_scheduler.warmup_steps,
+                gamma=1.0,
+            )
+        elif self.actor_lr_type == "plateau":
+            self.actor_lr_scheduler = WarmupReduceLROnPlateau(
+                self.actor_optimizer,
+                warmup_steps = cfg.train.actor_lr_scheduler.warmup_steps,
+                target_lr = cfg.train.actor_lr,
+                mode='max',         # Use 'max' for rewards if they are your metric
+                min_lr = cfg.train.critic_lr_scheduler.min_lr,
+                factor=0.8, 
+                patience=8, 
+                threshold=20,
+                verbose=True
+            )
+        
         
         self.critic_optimizer = torch.optim.AdamW(
             self.model.critic.parameters(),
             lr=cfg.train.critic_lr,
             weight_decay=cfg.train.critic_weight_decay,
         )
-        self.critic_lr_scheduler = CosineAnnealingWarmupRestarts(
-            self.critic_optimizer,
-            first_cycle_steps=cfg.train.critic_lr_scheduler.first_cycle_steps,
-            cycle_mult=1.0,
-            max_lr=cfg.train.critic_lr,
-            min_lr=cfg.train.critic_lr_scheduler.min_lr,
-            warmup_steps=cfg.train.critic_lr_scheduler.warmup_steps,
-            gamma=1.0,
-        )
-
+        
+        self.critic_lr_type = cfg.train.critic_lr_scheduler.get("type", "cosine")
+        log.info(f"critic_lr_type:{self.critic_lr_type}")
+        if self.critic_lr_type == "cosine":
+            self.critic_lr_scheduler = CosineAnnealingWarmupRestarts(
+                self.critic_optimizer,
+                first_cycle_steps=cfg.train.critic_lr_scheduler.first_cycle_steps,
+                cycle_mult=1.0,
+                max_lr=cfg.train.critic_lr,
+                min_lr=cfg.train.critic_lr_scheduler.min_lr,
+                warmup_steps=cfg.train.critic_lr_scheduler.warmup_steps,
+                gamma=1.0,
+            )
+        elif self.critic_lr_type == "plateau":
+            self.critic_lr_scheduler = WarmupReduceLROnPlateau(
+                self.critic_optimizer,
+                warmup_steps = cfg.train.critic_lr_scheduler.warmup_steps,
+                target_lr = cfg.train.critic_lr,
+                min_lr = cfg.train.critic_lr_scheduler.min_lr,
+                mode='max',         # Use 'max' for rewards if they are your metric
+                factor=0.5, 
+                patience=8, 
+                threshold=20,
+                verbose=True
+            )
+        
         # Generalized advantage estimation
         self.gae_lambda: float = cfg.train.get("gae_lambda", 0.95)
 
@@ -97,7 +128,7 @@ class TrainPPOAgent(TrainAgent):
         
         if self.reward_scale_running:
             self.running_reward_scaler = RunningRewardScaler(cfg.env.n_envs)
-        
+
         # Use base policy
         self.use_bc_loss: bool = cfg.train.get("use_bc_loss", False)
         self.bc_coeff: float = cfg.train.get("bc_loss_coeff", 0)
@@ -281,7 +312,7 @@ class TrainPPOAgent(TrainAgent):
             }
 
         
-    def log(self, train_prt_str_additional="", train_log_dict_additional={}, pad=75):
+    def log_legacy(self, train_prt_str_additional="", train_log_dict_additional={}, pad=75):
         '''
         train_prt_str_additional: str, additional information in training that will be printed to log console that is not included in train_prt_str_basic
         train_log_dict_additional: dict, additional information in training that will be logged to wandb that is not included in train_log_dict_basic
@@ -356,5 +387,112 @@ class TrainPPOAgent(TrainAgent):
                 self.run_results[-1]["train_episode_reward"] = self.buffer.avg_episode_reward
             with open(self.result_path, "wb") as f:
                 pickle.dump(self.run_results, f)
-  
-    ########################################################################
+    
+    
+    
+    
+    def log(self, train_prt_str_additional="", train_log_dict_additional={}, pad=75):
+        '''
+        train_prt_str_additional: str, additional information in training that will be printed to log console that is not included in train_prt_str_basic
+        train_log_dict_additional: dict, additional information in training that will be logged to wandb that is not included in train_log_dict_basic
+        '''
+        BOLDSTART = '\033[1m'
+        BOLDEND = '\033[0m'
+
+        self.run_results.append(
+            {
+                "itr": self.itr,
+                "step": self.cnt_train_step,
+            }
+        )
+        if self.save_trajs:
+            self.run_results[-1]["self.obs_full_trajs"] = self.obs_full_trajs
+            self.run_results[-1]["self.obs_trajs"] = self.obs_trajs
+            self.run_results[-1]["action_trajs"] = self.samples_trajs
+            self.run_results[-1]["self.reward_trajs"] = self.reward_trajs
+        if self.itr % self.log_freq == 0:
+            time = self.timer()
+            self.run_results[-1]["time"] = time
+            if self.eval_mode:
+                # Updated evaluation log with avg ± std formatting
+                log.info(create_bordered_text(
+                    f"{BOLDSTART}Evaluation at itr {self.itr}{BOLDEND}:\n"
+                    f"Success Rate: {self.buffer.success_rate * 100:3.2f}% ± {self.buffer.std_success_rate * 100:3.2f}%\n"
+                    f"Episode Reward: {self.buffer.avg_episode_reward:8.2f} ± {self.buffer.std_episode_reward:8.2f}\n"
+                    f"Best Reward (per action): {self.buffer.avg_best_reward:8.2f} ± {self.buffer.std_best_reward:8.2f}\n"
+                    f"Episode Length: {self.buffer.avg_episode_length:8.2f} ± {self.buffer.std_episode_length:8.2f}\n"
+                    f"""Actor lr :{self.actor_optimizer.param_groups[0]["lr"]:.2e}\n"""
+                    f"""Critic lr: {self.critic_optimizer.param_groups[0]["lr"]:.2e}\n"""
+                ))
+                if self.use_wandb:
+                    wandb.log(
+                        {
+                            "success rate - eval": self.buffer.success_rate,
+                            "avg episode reward - eval": self.buffer.avg_episode_reward,
+                            "avg best reward - eval": self.buffer.avg_best_reward,
+                            "num episode - eval": self.buffer.num_episode_finished,
+                            "std episode reward - eval": self.buffer.std_episode_reward,
+                            "std best reward - eval": self.buffer.std_best_reward,
+                            "std success rate - eval": self.buffer.std_success_rate,
+                            "avg episode length - eval": self.buffer.avg_episode_length,
+                            "std episode length - eval": self.buffer.std_episode_length,
+                        },
+                        step=self.itr,
+                        commit=False,
+                    )
+                self.run_results[-1].update({
+                    "eval_success_rate": self.buffer.success_rate,
+                    "eval_episode_reward": self.buffer.avg_episode_reward,
+                    "eval_best_reward": self.buffer.avg_best_reward,
+                    "eval_avg_episode_length": self.buffer.avg_episode_length,
+                    "eval_std_episode_reward": self.buffer.std_episode_reward,
+                })
+                
+                if self.current_best_reward < self.buffer.avg_episode_reward:
+                    self.current_best_reward = self.buffer.avg_episode_reward
+                    self.is_best_so_far = True
+                    log.info(f"New best reward evaluated: {self.current_best_reward:4.3f}")
+            else:
+                # Updated training log with avg ± std formatting
+                train_prt_str_basic = (
+                    f"itr {self.itr} | Total Step {self.cnt_train_step / 1e6:4.3f} M | Time: {time:8.3f}\n"
+                    f"Episode Reward: {self.buffer.avg_episode_reward:8.2f} ± {self.buffer.std_episode_reward:8.2f} | "
+                    f"Success Rate: {self.buffer.success_rate * 100:3.2f}% ± {self.buffer.std_success_rate * 100:3.2f}% | "
+                    f"Avg Best Reward: {self.buffer.avg_best_reward:8.2f} ± {self.buffer.std_best_reward:8.2f}\n"
+                    f"Episode Length: {self.buffer.avg_episode_length:8.2f} ± {self.buffer.std_episode_length:8.2f} |"
+                    f"""Actor lr :{self.actor_optimizer.param_groups[0]["lr"]:.2e} |"""
+                    f"""Critic lr: {self.critic_optimizer.param_groups[0]["lr"]:.2e}\n"""
+                )
+                
+                formatted_items = [f"{key}: {value:.5f}" for key, value in self.train_ret_dict.items()]
+                num_items_per_row = 10
+                for i in range(0, len(formatted_items), num_items_per_row):
+                    train_prt_str_basic += " | ".join(formatted_items[i:i+num_items_per_row]) + "\n"
+                log.info(train_prt_str_basic + train_prt_str_additional)
+                
+                # Log training metrics to WandB
+                if self.use_wandb:
+                    train_log_dict_basic = {
+                        "total env step": self.cnt_train_step,
+                        "avg episode reward - train": self.buffer.avg_episode_reward,
+                        "num episode - train": self.buffer.num_episode_finished,
+                        "actor lr": self.actor_optimizer.param_groups[0]["lr"],
+                        "critic lr": self.critic_optimizer.param_groups[0]["lr"],
+                        "success rate - train": self.buffer.success_rate,
+                        "avg best reward - train": self.buffer.avg_best_reward,
+                        "std episode reward - train": self.buffer.std_episode_reward,
+                        "std best reward - train": self.buffer.std_best_reward,
+                        "std success rate - train": self.buffer.std_success_rate,
+                        "avg episode length - train": self.buffer.avg_episode_length,
+                        "std episode length - train": self.buffer.std_episode_length,
+                    }
+                    train_log_dict_basic.update(self.train_ret_dict)
+                    train_log_dict = {**train_log_dict_basic, **(train_log_dict_additional or {})}
+                    wandb.log(
+                        train_log_dict,
+                        step=self.itr,
+                        commit=True,
+                    )
+                self.run_results[-1]["train_episode_reward"] = self.buffer.avg_episode_reward
+            with open(self.result_path, "wb") as f:
+                pickle.dump(self.run_results, f)
