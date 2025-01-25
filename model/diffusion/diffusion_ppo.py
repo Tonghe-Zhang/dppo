@@ -66,6 +66,7 @@ class PPODiffusion(VPGDiffusion):
         oldlogprobs,
         use_bc_loss=False,
         reward_horizon=4,
+        verbose =True
     ):
         """
         PPO loss
@@ -91,6 +92,12 @@ class PPODiffusion(VPGDiffusion):
             get_ent=True,
         )
         entropy_loss = -eta.mean()
+        
+        
+        if verbose:
+            log.info(f"oldlogprobs.min={oldlogprobs.min():5.3f}, max={oldlogprobs.max():5.3f}, std of oldlogprobs={oldlogprobs.std():5.3f}")
+            log.info(f"newlogprobs.min={newlogprobs.min():5.3f}, max={newlogprobs.max():5.3f}, std of newlogprobs={newlogprobs.std():5.3f}")
+        
         newlogprobs = newlogprobs.clamp(min=-5, max=2)
         oldlogprobs = oldlogprobs.clamp(min=-5, max=2)
 
@@ -104,7 +111,8 @@ class PPODiffusion(VPGDiffusion):
         newlogprobs = newlogprobs.mean(dim=(-1, -2)).view(-1)
         oldlogprobs = oldlogprobs.mean(dim=(-1, -2)).view(-1)
         # print(f"3 oldlogprobs.shape={oldlogprobs.shape}")   # (50,000)
-
+        
+                     
         bc_loss = 0
         if use_bc_loss:
             # See Eqn. 2 of https://arxiv.org/pdf/2403.03949.pdf
@@ -133,11 +141,25 @@ class PPODiffusion(VPGDiffusion):
         if self.norm_adv:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
+        
+        with torch.no_grad():
+            if verbose:
+                advantage_stats = {
+                    "mean":f"{advantages.mean().item():2.3f}",
+                    "std": f"{advantages.std().item():2.3f}",
+                    "max": f"{advantages.max().item():2.3f}",
+                    "min": f"{advantages.min().item():2.3f}"
+                }
+                log.info(f"DEBUG: Advantage stats: {advantage_stats}")
+                
         # Clip advantages by 5th and 95th percentile
         advantage_min = torch.quantile(advantages, self.clip_advantage_lower_quantile)
         advantage_max = torch.quantile(advantages, self.clip_advantage_upper_quantile)
         advantages = advantages.clamp(min=advantage_min, max=advantage_max)
 
+        
+        
+                
         # denoising discount
         discount = torch.tensor(
             [

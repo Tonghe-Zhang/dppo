@@ -152,7 +152,7 @@ class VPGDiffusion(DiffusionModel):
         else:
             ft_indices = torch.where(t < self.ft_denoising_steps)[0]
 
-        print(f"t={t.shape}, t={t}, self.ft_denoising_steps={self.ft_denoising_steps}, ft_indices={ft_indices}")
+        # print(f"t={t.shape}, t={t}, self.ft_denoising_steps={self.ft_denoising_steps}, ft_indices={ft_indices}")
         
         
         # Use base policy to query expert model, e.g. for imitation loss
@@ -162,10 +162,10 @@ class VPGDiffusion(DiffusionModel):
         if len(ft_indices) > 0:
             cond_ft = {key: cond[key][ft_indices] for key in cond}
             noise_ft = actor(x[ft_indices], t[ft_indices], cond=cond_ft)
-            print(f"noise_ft.shape={noise_ft.shape}")
+            # print(f"noise_ft.shape={noise_ft.shape}")
             noise[ft_indices] = noise_ft
 
-        print(f"noise.shape={noise.shape}") # n_envs, horizion_steps, action_dim
+        # print(f"noise.shape={noise.shape}") # n_envs, horizion_steps, action_dim
         
         # Predict x_0
         if self.predict_epsilon:
@@ -228,7 +228,7 @@ class VPGDiffusion(DiffusionModel):
             logvar = extract(self.ddpm_logvar_clipped, t, x.shape)
             etas = torch.ones_like(mu).to(mu.device)  # always one for DDPM
         
-        print(f"mu.shape={mu.shape}, logvar.shape={logvar.shape}, etas.shape={etas.shape}")
+        # print(f"mu.shape={mu.shape}, logvar.shape={logvar.shape}, etas.shape={etas.shape}")
         # mu.shape=torch.Size([40, 4, 3]), logvar.shape=torch.Size([40, 1, 1]), etas.shape=torch.Size([40, 4, 3])
         return mu, logvar, etas
 
@@ -358,7 +358,7 @@ class VPGDiffusion(DiffusionModel):
         }  # less memory usage than einops?
         #   state:  (B * self.ft_denoising_steps, To, Do)
         #   rgb:    (B * self.ft_denoising_steps, To, C, H, W)
-        print(f"""cond["state"].shape={cond["state"].shape}""")
+        # print(f"""cond["state"].shape={cond["state"].shape}""")
         
         # Repeat t for batch dim, keep it 1-dim
         if self.use_ddim:
@@ -370,11 +370,11 @@ class VPGDiffusion(DiffusionModel):
                 step=-1,
                 device=self.device,
             )
-        print(f"t_single.shape={t_single.shape}, t_single = {t_single}")
+        # print(f"t_single.shape={t_single.shape}, t_single = {t_single}")
         
         t_all = t_single.repeat(chains.shape[0], 1).flatten()
         
-        print(f"t_all.shape={t_all.shape}, t_all={t_all}")
+        # print(f"t_all.shape={t_all.shape}, t_all={t_all}")
         
         # 4,3,2,1,0,4,3,2,1,0,...,4,3,2,1,0
         if self.use_ddim:
@@ -386,7 +386,7 @@ class VPGDiffusion(DiffusionModel):
             indices = indices_single.repeat(chains.shape[0])
         else:
             indices = None
-        print(f"indices={indices}")
+        # print(f"indices={indices}")
         
         # Split chains
         chains_prev = chains[:, :-1].reshape(-1, self.horizon_steps, self.action_dim)

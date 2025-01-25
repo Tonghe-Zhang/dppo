@@ -50,7 +50,7 @@ class TrainPPOFlowAgent(TrainPPOAgent):
         )
     def adjust_finetune_schedule(self):
         pass
-
+    
     @torch.no_grad()
     def get_samples_logprobs(self, cond:dict, ret_device='cpu', save_chains=True, normalize_time_horizon=False, normalize_dimension=False):
         # returns: action_samples are still numpy because mujoco engine receives np.
@@ -122,7 +122,9 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 # minibatch gradient descent
                 self.model: PPOFlow
                 pg_loss, entropy_loss, v_loss, bc_loss, \
-                clipfrac, approx_kl, ratio= self.model.loss(*minibatch, use_bc_loss=self.use_bc_loss, normalize_time_horizon=self.normalize_time_horizon, normalize_dimension=self.normalize_entropy_logprob_dim)
+                clipfrac, approx_kl, ratio, \
+                oldlogprob_min, oldlogprob_max, oldlogprob_std,\
+                    newlogprob_min, newlogprob_max, newlogprob_std = self.model.loss(*minibatch, use_bc_loss=self.use_bc_loss, normalize_time_horizon=self.normalize_time_horizon, normalize_dimension=self.normalize_entropy_logprob_dim)
                 
                 if verbose:
                     log.info(f"update_epoch={update_epoch}/{self.update_epochs}, batch_id={batch_id}/{max(1, self.total_steps // self.batch_size)}, ratio={ratio:.3f}, clipfrac={clipfrac:.3f}, approx_kl={approx_kl:.2e}")
@@ -161,19 +163,25 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                     break
             if self.lr_schedule=='fixed' and kl_change_too_much:
                 break
-            
+        
         clip_fracs=np.mean(clipfracs_list)
         self.train_ret_dict = {
-                    "loss": loss,
-                    "pg_loss": pg_loss,
-                    "v_loss": v_loss,
-                    "entropy_loss": entropy_loss,
-                    "bc_loss": bc_loss,
-                    "approx_kl": approx_kl,
-                    "ratio": ratio,
-                    "clipfracs": clip_fracs,
-                    "explained_var": explained_var,
-                }
+                "loss": loss,
+                "pg_loss": pg_loss,
+                "value loss": v_loss,
+                "entropy_loss": entropy_loss,
+                "bc_loss": bc_loss,
+                "approx_kl": approx_kl,
+                "ratio": ratio,
+                "clipfrac": clip_fracs,
+                "explained_variance": explained_var,
+                "old_logprob_min": oldlogprob_min,
+                "old_logprob_max": oldlogprob_max,
+                "old_logprob_std": oldlogprob_std,
+                "new_logprob_min": newlogprob_min,
+                "new_logprob_max": newlogprob_max,
+                "new_logprob_std": newlogprob_std,
+            }
     
     def run(self):
         self.prepare_run()

@@ -56,7 +56,6 @@ class CriticObs(torch.nn.Module):
 
 class CriticObsAct(torch.nn.Module):
     """State-action double critic network."""
-
     def __init__(
         self,
         cond_dim,

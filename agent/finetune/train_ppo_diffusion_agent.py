@@ -140,7 +140,8 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                         self.eta_optimizer.step()
                 self.critic_optimizer.step()
                 
-                if verbose: log.info(f"update_epoch: {update_epoch}, num_batch: {max(1, self.total_steps // self.batch_size)}, approx_kl: {approx_kl}")
+                if verbose: 
+                    log.info(f"update_epoch: {update_epoch}, num_batch: {max(1, self.total_steps // self.batch_size)}, approx_kl: {approx_kl}")
                 
                 if self.target_kl is not None and approx_kl > self.target_kl:
                     kl_change_too_much = True
@@ -190,7 +191,7 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
 
             if not self.eval_mode:
                 self.buffer.update(obs_venv, self.model.critic) # for gpu version, add device=self.device
-                self.agent_update()
+                self.agent_update() 
             
             self.plot_state_trajecories() #(only in D3IL)
 

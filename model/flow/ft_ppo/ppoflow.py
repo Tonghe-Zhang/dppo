@@ -34,7 +34,8 @@ class PPOFlow(nn.Module):
                  clip_ploss_coef,
                  clip_ploss_coef_base,
                  clip_ploss_coef_rate,
-                 clip_vloss_coef=None
+                 clip_vloss_coef=None,
+                 denoised_clip_value=1.0,
                  ):
         super().__init__()
         self.device = device
@@ -58,7 +59,6 @@ class PPOFlow(nn.Module):
         ###############################################################
         
         self.report_network_params()
-        
         
         self.action_dim = act_dim
         self.horizon_steps = horizon_steps
@@ -89,6 +89,9 @@ class PPOFlow(nn.Module):
         
         self.set_logprob_noise_levels()
         
+        # clip intermediate actions during inference
+        self.denoised_clip_value = denoised_clip_value
+        
     def report_network_params(self):
         logging.info(
             f"Number of network parameters: Total: {sum(p.numel() for p in self.parameters())/1e6} M. Actor:{sum(p.numel() for p in self.actor_old.parameters())/1e6} M. Actor (finetune) : {sum(p.numel() for p in self.actor_ft.parameters())/1e6} M. Critic: {sum(p.numel() for p in self.critic.parameters())/1e6} M"
@@ -111,7 +114,11 @@ class PPOFlow(nn.Module):
             a = 0.2 #2.0
             std = torch.sqrt(a * t * (1 - t))
         elif self.noise_scheduler_type == 'lin':
-            k=0.2
+            k=0.1   # 0.2
+            b=0.0
+            std = k*t+b
+        elif self.noise_scheduler_type == 'learnable':
+            k=0.1  # 0.2
             b=0.0
             std = k*t+b
         else:
@@ -133,7 +140,11 @@ class PPOFlow(nn.Module):
         self.logprob_noise_levels = self.logprob_noise_levels.clamp(min=self.min_logprob_denoising_std)
 
     
-    def get_logprobs(self, cond:dict, x_chain:Tensor, get_entropy =False, normalize_time_horizon=False, normalize_dimension=False):
+    def get_logprobs(self, cond:dict, x_chain:Tensor, 
+                     get_entropy =False, 
+                     normalize_time_horizon=False, 
+                     normalize_dimension=False,
+                     clip_intermediate_actions=True):
         '''
         inputs:
             x_chain: torch.Tensor of shape `[batchsize, self.inference_steps+1, self.horizon_steps, self.act_dim]`
@@ -154,6 +165,7 @@ class PPOFlow(nn.Module):
         
         B = x_chain.shape[0]
         chains_prev = x_chain[:, :-1,:, :].flatten(-2,-1)                       # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
+        chains_next = x_chain[:, 1:, :, :].flatten(-2,-1)                       # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
         
         # initial probability
         init_dist = Normal(torch.zeros(B, self.horizon_steps* self.action_dim, device=self.device), 1.0)
@@ -171,11 +183,14 @@ class PPOFlow(nn.Module):
             vt=self.actor_ft(xt, t, cond)                                       # [batchsize, self.horizon_steps, self.act_dim]
             chains_vel[:,i] = vt.flatten(-2,-1)                                 # [batchsize, self.horizon_steps x self.act_dim]
         
-        chains_mean = chains_prev + chains_vel * dt                             # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
+        chains_mean = (chains_prev + chains_vel * dt)                           # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
+        if clip_intermediate_actions:
+            chains_mean = chains_mean.clamp(-self.denoised_clip_value, self.denoised_clip_value)
+
         chains_stds = self.logprob_noise_levels.unsqueeze(0).unsqueeze(-1).expand(B, -1, self.act_dim_total)  # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
-        chains_next = x_chain[:, 1:, :, :].flatten(-2,-1)                       # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
-        
         chains_dist = Normal(chains_mean, chains_stds)
+        
+        # logprobability and entropy of the transitions
         logprob_trans = chains_dist.log_prob(chains_next).sum(-1)               # [batchsize, self.inference_steps] sum up self.horizon_steps x self.act_dim 
         if get_entropy:
             entropy_trans = chains_dist.entropy().sum(-1)                       # [batchsize, self.inference_steps] Sum over all dimensions
@@ -190,7 +205,10 @@ class PPOFlow(nn.Module):
         if normalize_time_horizon:
             logprob = logprob / (self.inference_steps+1)
         if normalize_dimension:
-            return logprob/self.act_dim_total, entropy_rate_est/self.act_dim_total if get_entropy else None
+            logprob = logprob/self.act_dim_total
+            entropy_rate_est = entropy_rate_est/self.act_dim_total
+        
+        log.info(f"DEBUG: entropy_rate_est={entropy_rate_est.shape} Entropy Percentiles: 10%={entropy_rate_est.quantile(0.1):.2f}, 50%={entropy_rate_est.median():.2f}, 90%={entropy_rate_est.quantile(0.9):.2f}")
         return logprob, entropy_rate_est if get_entropy else None
     
 
@@ -206,7 +224,11 @@ class PPOFlow(nn.Module):
         return xt, log_prob
     
     @torch.no_grad()
-    def get_actions(self, cond:dict, eval_mode:bool, save_chains=False, normalize_time_horizon=False, normalize_dimension=False):
+    def get_actions(self, cond:dict, eval_mode:bool, 
+                    save_chains=False, 
+                    normalize_time_horizon=False, 
+                    normalize_dimension=False,
+                    clip_intermediate_actions=True):
         '''
         inputs:
             cond: dict, contatinin...
@@ -232,6 +254,7 @@ class PPOFlow(nn.Module):
         
         # sample first point
         xt, log_prob = self.sample_first_point(B)
+        xt:torch.Tensor
         if save_chains:
             x_chain[:, 0] = xt
         
@@ -239,10 +262,13 @@ class PPOFlow(nn.Module):
             t = steps[:,i]
             vt=self.actor_ft(xt, t, cond)
             xt += vt* dt
+            if clip_intermediate_actions: #Discourage excessive exploration, but may also slow down convergence. 
+                xt = xt.clamp(-self.denoised_clip_value, self.denoised_clip_value)
             
-            # add noise during training
+            # add noise during training, but prevent too large noises. 
             std = self.stochastic_interpolate(t).unsqueeze(-1).unsqueeze(-1).repeat(1, *xt.shape[1:])
             std = torch.clamp(std, min=self.min_sampling_denoising_std)
+            
             dist = Normal(xt, std)
             if not eval_mode:
                 xt = dist.sample().clamp_(dist.loc - self.randn_clip_value * dist.scale,
@@ -257,11 +283,12 @@ class PPOFlow(nn.Module):
 
             if save_chains:
                 x_chain[:, i+1] = xt
-        
+            
         if normalize_time_horizon:
             log_prob = log_prob/(self.inference_steps+1)
         if normalize_dimension:
             log_prob = log_prob/self.act_dim_total
+        
         return (xt, x_chain, log_prob) if save_chains else (xt, log_prob)
     
     def loss(
@@ -274,7 +301,8 @@ class PPOFlow(nn.Module):
         oldlogprobs,
         use_bc_loss=False,
         normalize_time_horizon=False,
-        normalize_dimension=False
+        normalize_dimension=False,
+        verbose=True
     ):
         """
         PPO loss
@@ -293,15 +321,32 @@ class PPOFlow(nn.Module):
         """
         
         newlogprobs, entropy= self.get_logprobs(obs, chains, get_entropy=True, normalize_time_horizon=normalize_time_horizon,normalize_dimension=normalize_dimension)
+        if verbose:
+            log.info(f"oldlogprobs.min={oldlogprobs.min():5.3f}, max={oldlogprobs.max():5.3f}, std of oldlogprobs={oldlogprobs.std():5.3f}")
+            log.info(f"newlogprobs.min={newlogprobs.min():5.3f}, max={newlogprobs.max():5.3f}, std of newlogprobs={newlogprobs.std():5.3f}")
         
-        log.info(f"newlogprobs.min={newlogprobs.min():5.3f}, max={newlogprobs.max():5.3f}, std={newlogprobs.std():5.3f}")
-        log.info(f"oldlogprobs.min={oldlogprobs.min():5.3f}, max={oldlogprobs.max():5.3f}, std={newlogprobs.std():5.3f}")
-        
-        # newlogprobs = newlogprobs.clamp(min=-5, max=2)
-        # oldlogprobs = oldlogprobs.clamp(min=-5, max=2)
+        newlogprobs = newlogprobs.clamp(min=-1.0, max=1.0)
+        oldlogprobs = oldlogprobs.clamp(min=-1.0, max=1.0)
+        if verbose:
+            if oldlogprobs.min() < -1.0: log.info(f"WARNINIG: old logprobs too low, potential policy collapse detected, should encourage exploration.")
+            if newlogprobs.min() < -1.0: log.info(f"WARNINIG: new logprobs too low, potential policy collapse detected, should encourage exploration.")
+        # empirically we noticed that when the min of logprobs gets too negative (say, below -3) or when the std gets larger than 0.5 (usually these two events happen simultaneously) t
+        # the perfomance drops. 
         
         # batch normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        if verbose:
+            with torch.no_grad():
+                advantage_stats = {
+                    "mean":f"{advantages.mean().item():2.3f}",
+                    "std": f"{advantages.std().item():2.3f}",
+                    "max": f"{advantages.max().item():2.3f}",
+                    "min": f"{advantages.min().item():2.3f}"
+                }
+                log.info(f"DEBUG: Advantage stats: {advantage_stats}")
+                corr = torch.corrcoef(torch.stack([advantages, returns]))[0,1].item()
+                log.info(f"DEBUG: Advantage-Reward Correlation: {corr:.2f}")
+
         # Get ratio
         logratio = newlogprobs - oldlogprobs
         ratio = logratio.exp()
@@ -322,9 +367,17 @@ class PPOFlow(nn.Module):
         if self.clip_vloss_coef: # better not use. 
             v_clipped = torch.clamp(newvalues, oldvalues -self.clip_vloss_coef, oldvalues + self.clip_vloss_coef)
             v_loss = 0.5 *torch.max((newvalues - returns) ** 2, (v_clipped - returns) ** 2).mean()
-        
+        if verbose:
+            with torch.no_grad():
+                mse = F.mse_loss(newvalues, returns)
+                log.info(f"Value/Reward alignment: MSE={mse.item():.3f}")
+
         # Entropy loss
         entropy_loss = -entropy.mean()
+        # DEBUG: Monitor policy entropy distribution
+        if verbose:
+            with torch.no_grad():
+                log.info(f"DEBUG: Entropy Percentiles: 10%={entropy.quantile(0.1):.2f}, 50%={entropy.median():.2f}, 90%={entropy.quantile(0.9):.2f}")
         
         # bc loss
         bc_loss = 0.0
@@ -338,5 +391,11 @@ class PPOFlow(nn.Module):
             bc_loss,
             clipfrac,
             approx_kl.item(),
-            ratio.mean().item()
+            ratio.mean().item(),
+            oldlogprobs.min(),
+            oldlogprobs.max(),
+            oldlogprobs.std(),
+            newlogprobs.min(),
+            newlogprobs.max(),
+            newlogprobs.std()
         )
