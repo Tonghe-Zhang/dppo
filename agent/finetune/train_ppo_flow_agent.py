@@ -93,7 +93,7 @@ class TrainPPOFlowAgent(TrainPPOAgent):
             actor_param_group["lr"] = self.actor_lr
             critic_param_group["lr"] = self.critic_lr
         log.info(f"""adaptive kl {tune} lr: actor_lr={self.actor_optimizer.param_groups[0]["lr"]:.2e}, critic_lr={self.critic_optimizer.param_groups[0]["lr"]:.2e}""")
-        
+    
     def agent_update(self, verbose=True):
         obs, chains, returns, oldvalues, advantages, oldlogprobs = self.buffer.make_dataset()
         
@@ -167,20 +167,22 @@ class TrainPPOFlowAgent(TrainPPOAgent):
         clip_fracs=np.mean(clipfracs_list)
         self.train_ret_dict = {
                 "loss": loss,
-                "pg_loss": pg_loss,
+                "pg loss": pg_loss,
                 "value loss": v_loss,
                 "entropy_loss": entropy_loss,
                 "bc_loss": bc_loss,
-                "approx_kl": approx_kl,
+                "approx kl": approx_kl,
                 "ratio": ratio,
                 "clipfrac": clip_fracs,
-                "explained_variance": explained_var,
+                "explained variance": explained_var,
                 "old_logprob_min": oldlogprob_min,
                 "old_logprob_max": oldlogprob_max,
                 "old_logprob_std": oldlogprob_std,
                 "new_logprob_min": newlogprob_min,
                 "new_logprob_max": newlogprob_max,
                 "new_logprob_std": newlogprob_std,
+                "actor_lr": self.actor_optimizer.param_groups[0]["lr"],
+                "critic_lr": self.critic_optimizer.param_groups[0]["lr"],
             }
     
     def run(self):

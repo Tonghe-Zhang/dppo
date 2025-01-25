@@ -346,7 +346,7 @@ class PPOFlow(nn.Module):
                 log.info(f"DEBUG: Advantage stats: {advantage_stats}")
                 corr = torch.corrcoef(torch.stack([advantages, returns]))[0,1].item()
                 log.info(f"DEBUG: Advantage-Reward Correlation: {corr:.2f}")
-
+        
         # Get ratio
         logratio = newlogprobs - oldlogprobs
         ratio = logratio.exp()
@@ -383,7 +383,7 @@ class PPOFlow(nn.Module):
         bc_loss = 0.0
         if use_bc_loss:
             raise NotImplementedError
-    
+        
         return (
             pg_loss,
             entropy_loss,

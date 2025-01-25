@@ -47,6 +47,7 @@ class TrainPPOAgent(TrainAgent):
             lr=cfg.train.actor_lr,
             weight_decay=cfg.train.actor_weight_decay,
         )
+        
         # use cosine scheduler with linear warmup
         self.actor_lr_scheduler = CosineAnnealingWarmupRestarts(
             self.actor_optimizer,
@@ -57,6 +58,7 @@ class TrainPPOAgent(TrainAgent):
             warmup_steps=cfg.train.actor_lr_scheduler.warmup_steps,
             gamma=1.0,
         )
+        
         self.critic_optimizer = torch.optim.AdamW(
             self.model.critic.parameters(),
             lr=cfg.train.critic_lr,
@@ -95,7 +97,7 @@ class TrainPPOAgent(TrainAgent):
         
         if self.reward_scale_running:
             self.running_reward_scaler = RunningRewardScaler(cfg.env.n_envs)
-
+        
         # Use base policy
         self.use_bc_loss: bool = cfg.train.get("use_bc_loss", False)
         self.bc_coeff: float = cfg.train.get("bc_loss_coeff", 0)
@@ -131,8 +133,9 @@ class TrainPPOAgent(TrainAgent):
     
     def update_lr(self):
         self.critic_lr_scheduler.step()
-        if self.itr >= self.n_critic_warmup_itr: self.actor_lr_scheduler.step()
-    
+        if self.itr >= self.n_critic_warmup_itr: 
+            self.actor_lr_scheduler.step()
+        log.info(f"""learning rate updated. actor_lr={self.actor_optimizer.param_groups[0]["lr"]}, critic_lr={self.critic_optimizer.param_groups[0]["lr"]}""")
     
     ########################################################################
     # appended by Tonghe

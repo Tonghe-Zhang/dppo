@@ -1,17 +1,66 @@
+
+
+
+
+
+
+
+
+(mujoco_py) (base) zhangtonghe@eva6-zhangtonghe:~/dppo$ nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device
+=cuda:6 >flowppo_hopper_2.7k.log 2>&1 &
+[1] 2709882
+
+
+accelerates initial results, but gets bad when after 100 iters. 
+
+python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:5 wandb=null train.actor_lr=3e-5
+
+(actually warmup from 1e-5 to 3e-5)
+
+
+
+
+######################################
+
+this one is a bit too much
+
+python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:5 wandb=null train.actor_lr=1e-4
+
+
+
+Only enlarging the clip_ploss_coef from 0.01 to 0.03 significantly compromises performance
+
+python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:4 wandb=null train.actor_lr=3e-5 model.clip_ploss_coef=0.03
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 2208193
 
 nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:7 >flowppohopper_lin_0.2.log 2>&1 &
 
 linear scheduler, 0.2
 
-
 2215125
 
 nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:6 >flowppohopper_lin_0.1.log 2>&1 &
 
 linear scheduler, 0.1
-
-
 
 2220299
 
@@ -20,8 +69,6 @@ nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name
 linear scheduler, 0.2
 
 max_grad_norm=0.5
-
-
 
 2221908
 
@@ -32,12 +79,6 @@ linear scheduler, 0.1
 max_grad_norm=0.5
 
 ################################
-
-
-
-
-
-
 
 2066073
 
