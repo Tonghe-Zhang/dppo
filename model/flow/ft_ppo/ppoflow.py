@@ -30,6 +30,8 @@ class PPOFlow(nn.Module):
                  randn_clip_value,
                  min_sampling_denoising_std,
                  min_logprob_denoising_std,
+                 logprob_min,
+                 logprob_max,
                  clip_ploss_coef,
                  clip_ploss_coef_base,
                  clip_ploss_coef_rate,
@@ -83,24 +85,28 @@ class PPOFlow(nn.Module):
         self.obs_dim = obs_dim
         self.cond_steps = cond_steps
         
-        self.noise_scheduler_type = noise_scheduler_type
+        self.noise_scheduler_type:str = noise_scheduler_type
 
-        self.randn_clip_value = randn_clip_value
+        self.randn_clip_value:float = randn_clip_value
         # prevent extreme values sampled from gaussian. deviation from mean should stay within `randn_clip_value` times of std.
         
         # Minimum std used in denoising process when sampling action - helps exploration
-        self.min_sampling_denoising_std = min_sampling_denoising_std
+        self.min_sampling_denoising_std:float = min_sampling_denoising_std
 
         # Minimum std used in calculating denoising logprobs - for stability
-        self.min_logprob_denoising_std = min_logprob_denoising_std
+        self.min_logprob_denoising_std:float = min_logprob_denoising_std
         
-        self.clip_ploss_coef = clip_ploss_coef
-        self.clip_ploss_coef_base = clip_ploss_coef_base
-        self.clip_ploss_coef_rate = clip_ploss_coef_rate
-        self.clip_vloss_coef = clip_vloss_coef
+        # Minimum and maximum logprobability in each batch, cutoff within this range to prevent policy collapse
+        self.logprob_min:float= logprob_min
+        self.logprob_max:float= logprob_max
+        
+        self.clip_ploss_coef:float = clip_ploss_coef
+        self.clip_ploss_coef_base:float = clip_ploss_coef_base
+        self.clip_ploss_coef_rate:float = clip_ploss_coef_rate
+        self.clip_vloss_coef:float = clip_vloss_coef
         
         # clip intermediate actions during inference
-        self.denoised_clip_value = denoised_clip_value
+        self.denoised_clip_value:float = denoised_clip_value
     
     def check_gradient_flow(self):
         print(f"{next(self.actor_ft.policy.parameters()).requires_grad}") #True
@@ -195,7 +201,7 @@ class PPOFlow(nn.Module):
             logprob = logprob/self.act_dim_total
             entropy_rate_est = entropy_rate_est/self.act_dim_total
         
-        log.info(f"DEBUG: entropy_rate_est={entropy_rate_est.shape} Entropy Percentiles: 10%={entropy_rate_est.quantile(0.1):.2f}, 50%={entropy_rate_est.median():.2f}, 90%={entropy_rate_est.quantile(0.9):.2f}")
+        log.info(f"entropy_rate_est={entropy_rate_est.shape} Entropy Percentiles: 10%={entropy_rate_est.quantile(0.1):.2f}, 50%={entropy_rate_est.median():.2f}, 90%={entropy_rate_est.quantile(0.9):.2f}")
         return logprob, entropy_rate_est if get_entropy else None
     
 
@@ -315,14 +321,16 @@ class PPOFlow(nn.Module):
             log.info(f"oldlogprobs.min={oldlogprobs.min():5.3f}, max={oldlogprobs.max():5.3f}, std of oldlogprobs={oldlogprobs.std():5.3f}")
             log.info(f"newlogprobs.min={newlogprobs.min():5.3f}, max={newlogprobs.max():5.3f}, std of newlogprobs={newlogprobs.std():5.3f}")
         
-        newlogprobs = newlogprobs.clamp(min=-1.0, max=1.0)
-        oldlogprobs = oldlogprobs.clamp(min=-1.0, max=1.0)
+        
+        newlogprobs = newlogprobs.clamp(min=self.logprob_min, max=self.logprob_max)
+        oldlogprobs = oldlogprobs.clamp(min=self.logprob_min, max=self.logprob_max)
         if verbose:
-            if oldlogprobs.min() < -1.0: log.info(f"WARNINIG: old logprobs too low, potential policy collapse detected, should encourage exploration.")
-            if newlogprobs.min() < -1.0: log.info(f"WARNINIG: new logprobs too low, potential policy collapse detected, should encourage exploration.")
+            if oldlogprobs.min() < self.logprob_min: log.info(f"WARNINIG: old logprobs too low, potential policy collapse detected, should encourage exploration.")
+            if newlogprobs.min() < self.logprob_min: log.info(f"WARNINIG: new logprobs too low, potential policy collapse detected, should encourage exploration.")
+            if newlogprobs.max() > self.logprob_max: log.info(f"WARNINIG: new logprobs too high")
+            if oldlogprobs.max() > self.logprob_max: log.info(f"WARNINIG: old logprobs too high")
         # empirically we noticed that when the min of logprobs gets too negative (say, below -3) or when the std gets larger than 0.5 (usually these two events happen simultaneously) t
         # the perfomance drops. 
-        
         # batch normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         if verbose:
@@ -333,9 +341,9 @@ class PPOFlow(nn.Module):
                     "max": f"{advantages.max().item():2.3f}",
                     "min": f"{advantages.min().item():2.3f}"
                 }
-                log.info(f"DEBUG: Advantage stats: {advantage_stats}")
+                log.info(f"Advantage stats: {advantage_stats}")
                 corr = torch.corrcoef(torch.stack([advantages, returns]))[0,1].item()
-                log.info(f"DEBUG: Advantage-Reward Correlation: {corr:.2f}")
+                log.info(f"Advantage-Reward Correlation: {corr:.2f}")
         
         # Get ratio
         logratio = newlogprobs - oldlogprobs
@@ -364,10 +372,10 @@ class PPOFlow(nn.Module):
 
         # Entropy loss
         entropy_loss = -entropy.mean()
-        # DEBUG: Monitor policy entropy distribution
+        # Monitor policy entropy distribution
         if verbose:
             with torch.no_grad():
-                log.info(f"DEBUG: Entropy Percentiles: 10%={entropy.quantile(0.1):.2f}, 50%={entropy.median():.2f}, 90%={entropy.quantile(0.9):.2f}")
+                log.info(f"Entropy Percentiles: 10%={entropy.quantile(0.1):.2f}, 50%={entropy.median():.2f}, 90%={entropy.quantile(0.9):.2f}")
         
         # bc loss
         bc_loss = 0.0

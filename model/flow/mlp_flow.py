@@ -183,6 +183,7 @@ class NoisyFlowMLP(nn.Module):
             cond: dict with key state/rgb; more recent obs at the end
                 state: (B, To, Do)
             step: (B,) torch.tensor, optional, flow matching inference step, from 0 to denoising_steps-1
+            *here, B is the n_envs
         outputs:
              vel                [B, Ta, Da]
              noise_std          [B, Ta x Da]
@@ -202,7 +203,7 @@ class NoisyFlowMLP(nn.Module):
             noise_logvar    = self.mlp_logvar(feature_noise)
             noise_std       = self.process_noise(noise_logvar)
         else:
-            noise_std       = self.logprob_noise_levels[step].repeat(B,1)
+            noise_std       = self.logprob_noise_levels[:, step].repeat(B,1)
         
         if learn_exploration_noise:
             return vel, noise_std

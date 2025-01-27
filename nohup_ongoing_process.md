@@ -1,14 +1,16 @@
+3926046
 
+trying to reproduce 0125 results 2829 after extending codebase to allow learnable training.
+
+nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:0 >flowppo-learnable-reproduce-fix.log 2>&1 &
+
+###########################################################
 
 3906934
 
 trying to reproduce 0125 results 2829
 
 nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp_noiseless device=cuda:6 >hopper-reflow-ppo-reproduce-2829-denoise=4.log 2>&1 &
-
-
-
-
 
 3900883
 

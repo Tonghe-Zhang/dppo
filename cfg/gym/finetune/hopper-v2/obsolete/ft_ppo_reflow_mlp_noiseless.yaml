@@ -15,7 +15,7 @@ device: cuda:7
 env_name: hopper-medium-v2
 obs_dim: 11
 action_dim: 3
-denoising_steps: 4 #20 be careful, 20 denoising steps not sure yet even when not learning noiser net.
+denoising_steps: 4 #20
 cond_steps: 1
 horizon_steps: 4
 act_steps: 4
@@ -47,7 +47,7 @@ train:
   n_steps: 500
   gamma: 0.99
 
-  actor_lr: 3e-5              #
+  actor_lr: 3e-5
   actor_weight_decay: 0
 
   actor_lr_scheduler:
@@ -56,7 +56,7 @@ train:
     warmup_steps: 10
     min_lr: 1e-5              #1e-4 5e-4 #
 
-  critic_lr: 5e-4
+  critic_lr: 5e-4           
   critic_weight_decay: 1e-5
 
   critic_lr_scheduler:
@@ -86,10 +86,10 @@ train:
   # max_grad_norm: 1.0      #1.0
 
 model:
-  _target_: model.flow.ft_ppo.ppoflow.PPOFlow
+  _target_: model.flow.ft_ppo.ppoflow_noiseless.PPOFlow
   device: ${device}
-  policy:
-    _target_: model.flow.mlp_flow.FlowMLP
+  actor:
+    _target_: model.diffusion.mlp_diffusion.DiffusionMLP
     horizon_steps: ${horizon_steps}
     action_dim: ${action_dim}
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
@@ -117,14 +117,9 @@ model:
   randn_clip_value: 3
   min_sampling_denoising_std: 0.08  #0.1
   min_logprob_denoising_std: 0.08   #0.1 #1e-20 makes actor loss goes to nan, not sure why yet.
-  logprob_min: -1.0                 #new stuff
-  logprob_max: 1.0                  #new stuff  this value only works for 4 steps. 
+  logprob_min: -1.0
+  logprob_max: 1.0
   clip_ploss_coef: 0.01
   clip_ploss_coef_base: 0.01
   clip_ploss_coef_rate: 3
-  clip_vloss_coef: null
-  denoised_clip_value: 1.0
-  max_logprob_denoising_std: 1.0    #new stuff
-  time_dim_explore: 16              # new stuff
-  learn_explore_noise_from: ${denoising_steps}       # new stuff. when selected as denoising steps, same as fix all noise.
-  init_time_embedding: True
+
