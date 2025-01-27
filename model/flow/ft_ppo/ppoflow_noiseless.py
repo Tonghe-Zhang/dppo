@@ -1,13 +1,14 @@
 import logging
 import torch
 from torch import nn
+import numpy as np
 import copy
 import torch.nn.functional as F
 from torch import Tensor
+import math
 from typing import Tuple, List
 log = logging.getLogger(__name__)
-from flow.mlp_flow import NoisyFlowMLP, FlowMLP
-
+from model.flow.reflow import ReFlow
 from collections import namedtuple
 from torch.distributions.normal import Normal
 
@@ -16,7 +17,7 @@ Sample = namedtuple("Sample", "trajectories chains")
 class PPOFlow(nn.Module):
     def __init__(self, 
                  device,
-                 policy,
+                 actor,
                  critic,
                  actor_policy_path,
                  act_dim,
@@ -33,44 +34,29 @@ class PPOFlow(nn.Module):
                  clip_ploss_coef,
                  clip_ploss_coef_base,
                  clip_ploss_coef_rate,
-                 clip_vloss_coef,
-                 denoised_clip_value,
-                 max_logprob_denoising_std,
-                 time_dim_explore,
-                 learn_explore_noise_from,
-                 init_time_embedding
+                 clip_vloss_coef=None,
+                 denoised_clip_value=1.0,
                  ):
-        
         super().__init__()
-        
         self.device = device
         self.inference_steps = inference_steps      # number of steps for inference.
         self.ft_denoising_steps = inference_steps   # could be adjusted
-        self.learn_explore_noise_from = learn_explore_noise_from
         
-        self.actor_old = policy
-        self.load_policy(actor_policy_path)
+        self.actor_old = actor
+        self.load_actor(actor_policy_path)
+        self.actor_old.to(self.device)
         for param in self.actor_old.parameters():
             param.requires_grad = False             # don't train this copy, just use it to load checkpoint. 
         
-
-        policy_copy = copy.deepcopy(self.actor_old)
-        for param in policy_copy.parameters():
+        ###############################################################
+        self.actor_ft = copy.deepcopy(self.actor_old).to(self.device)
+        for param in self.actor_ft.parameters():
             param.requires_grad = True
-        self.actor_ft = NoisyFlowMLP(policy=policy_copy,
-                                    denoising_steps=inference_steps,
-                                    learn_explore_noise_from = learn_explore_noise_from,
-                                    inital_noise_scheduler_type=noise_scheduler_type,
-                                    min_logprob_denoising_std = min_logprob_denoising_std,
-                                    max_logprob_denoising_std = max_logprob_denoising_std,
-                                    learn_explore_time_embedding=True,
-                                    init_time_embedding=init_time_embedding,
-                                    time_dim_explore=time_dim_explore,
-                                    device=device)
-        logging.info("Cloned policy for fine-tuning")
+        logging.info("Cloned model for fine-tuning")
         
         self.critic = critic
-        self.critic = self.critic.to(self.device)
+        self.critic.to(self.device)
+        ###############################################################
         
         self.report_network_params()
         
@@ -84,6 +70,8 @@ class PPOFlow(nn.Module):
         self.cond_steps = cond_steps
         
         self.noise_scheduler_type = noise_scheduler_type
+        # we can make noise scheduler learnable. 
+        # also we should makes the scheduler return noise that is clipped. 
 
         self.randn_clip_value = randn_clip_value
         # prevent extreme values sampled from gaussian. deviation from mean should stay within `randn_clip_value` times of std.
@@ -99,22 +87,17 @@ class PPOFlow(nn.Module):
         self.clip_ploss_coef_rate = clip_ploss_coef_rate
         self.clip_vloss_coef = clip_vloss_coef
         
+        self.set_logprob_noise_levels()
+        
         # clip intermediate actions during inference
         self.denoised_clip_value = denoised_clip_value
-    
-    def check_gradient_flow(self):
-        print(f"{next(self.actor_ft.policy.parameters()).requires_grad}") #True
-        print(f"{next(self.actor_ft.mlp_logvar.parameters()).requires_grad}")#True
-        print(f"{next(self.actor_ft.time_embedding_explore.parameters()).requires_grad}")#True
-        print(f"{self.actor_ft.logvar_min.requires_grad}")#False
-        print(f"{self.actor_ft.logvar_max.requires_grad}")#False
         
     def report_network_params(self):
         logging.info(
             f"Number of network parameters: Total: {sum(p.numel() for p in self.parameters())/1e6} M. Actor:{sum(p.numel() for p in self.actor_old.parameters())/1e6} M. Actor (finetune) : {sum(p.numel() for p in self.actor_ft.parameters())/1e6} M. Critic: {sum(p.numel() for p in self.critic.parameters())/1e6} M"
         )
     
-    def load_policy(self, network_path, use_ema=False):
+    def load_actor(self, network_path, use_ema=False):
         if network_path:
             model_data = torch.load(network_path, map_location=self.device, weights_only=True)
             actor_network_data = {k.replace("network.", ""): v for k, v in model_data["model"].items()}
@@ -125,7 +108,33 @@ class PPOFlow(nn.Module):
             else: 
                 self.actor_old.load_state_dict(ema_actor_network_data)
                 logging.info("Loaded ema actor policy from %s", network_path)
+    
+    def stochastic_interpolate(self,t, device='cpu'):
+        if self.noise_scheduler_type == 'vp':
+            a = 0.2 #2.0
+            std = torch.sqrt(a * t * (1 - t))
+        elif self.noise_scheduler_type == 'lin':
+            k=0.1   # 0.2
+            b=0.0
+            std = k*t+b
+        else:
+            raise NotImplementedError
+        return std.to(self.device) if device != 'cpu' else std
+    
+    @torch.no_grad()
+    def set_logprob_noise_levels(self):
+        # we use this function to calculate log probabilities faster. 
         
+        self.logprob_noise_levels = torch.zeros(self.inference_steps, device=self.device)
+        
+        steps = torch.linspace(0, 1, self.inference_steps)
+        
+        for i, t in enumerate(steps):
+            self.logprob_noise_levels[i] = self.stochastic_interpolate(t)
+
+        self.logprob_noise_levels = self.logprob_noise_levels.clamp(min=self.min_logprob_denoising_std)
+
+    
     def get_logprobs(self, cond:dict, x_chain:Tensor, 
                      get_entropy =False, 
                      normalize_time_horizon=False, 
@@ -152,7 +161,6 @@ class PPOFlow(nn.Module):
         B = x_chain.shape[0]
         chains_prev = x_chain[:, :-1,:, :].flatten(-2,-1)                       # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
         chains_next = x_chain[:, 1:, :, :].flatten(-2,-1)                       # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
-        chains_stds = torch.zeros_like(chains_prev, device=self.device)         # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
         
         # initial probability
         init_dist = Normal(torch.zeros(B, self.horizon_steps* self.action_dim, device=self.device), 1.0)
@@ -165,16 +173,16 @@ class PPOFlow(nn.Module):
         steps = torch.linspace(0, 1, self.inference_steps).repeat(B, 1).to(self.device)  # [batchsize, self.inference_steps]
         dt = 1.0/self.inference_steps
         for i in range(self.inference_steps):
-            t       = steps[:,i]
-            xt      = x_chain[:,i]                                              # [batchsize, self.horizon_steps , self.act_dim]
-            vt, nt  =self.actor_ft.forward(xt, t, cond, True, i)                # [batchsize, self.horizon_steps, self.act_dim]
-            chains_vel[:,i]  = vt.flatten(-2,-1)                                # [batchsize, self.horizon_steps x self.act_dim]
-            chains_stds[:,i] = nt                                               # [batchsize, self.horizon_steps x self.act_dim]
+            t = steps[:,i]
+            xt = x_chain[:,i]                                                   # [batchsize, self.horizon_steps , self.act_dim]
+            vt=self.actor_ft.forward(xt, t, cond)                               # [batchsize, self.horizon_steps, self.act_dim]
+            chains_vel[:,i] = vt.flatten(-2,-1)                                 # [batchsize, self.horizon_steps x self.act_dim]
+        
         chains_mean = (chains_prev + chains_vel * dt)                           # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
         if clip_intermediate_actions:
             chains_mean = chains_mean.clamp(-self.denoised_clip_value, self.denoised_clip_value)
-        
-        # transition distribution
+
+        chains_stds = self.logprob_noise_levels.unsqueeze(0).unsqueeze(-1).expand(B, -1, self.act_dim_total)  # [batchsize, self.inference_steps, self.horizon_steps x self.act_dim]
         chains_dist = Normal(chains_mean, chains_stds)
         
         # logprobability and entropy of the transitions
@@ -182,10 +190,10 @@ class PPOFlow(nn.Module):
         if get_entropy:
             entropy_trans = chains_dist.entropy().sum(-1)                       # [batchsize, self.inference_steps] Sum over all dimensions
         
-        # logprobability of the whole markov chain.
+        # logprobability of the markov chain.
         logprob = logprob_init + logprob_trans.sum(-1)                          # [batchsize] accumulate over inference steps (Markov property)
         
-        # entropy rate estimate of the whole markov chain
+        # entropy rate estimate of the markov chain
         if get_entropy:
             entropy_rate_est = (entropy_init + entropy_trans.sum(-1))/(self.inference_steps + 1) # [batchsize] 
         
@@ -203,14 +211,11 @@ class PPOFlow(nn.Module):
     def sample_first_point(self, B:int):
         '''
         B: batchsize
-        outputs:
-            xt: torch.Tensor of shape `[batchsize, self.horizon_steps, self.action_dim]`
-            log_prob: torch.Tensor of shape `[batchsize]`
         '''
         dist = Normal(torch.zeros(B, self.horizon_steps* self.action_dim), 1.0)
         xt= dist.sample()
         log_prob = dist.log_prob(xt).sum(-1).to(self.device)                    # mean() or sum() 
-        xt=xt.reshape(B, self.horizon_steps, self.action_dim).to(self.device)
+        xt=xt.reshape(B,self.horizon_steps, self.action_dim).to(self.device)
         return xt, log_prob
     
     @torch.no_grad()
@@ -250,14 +255,14 @@ class PPOFlow(nn.Module):
         
         for i in range(self.inference_steps):
             t = steps[:,i]
-            vt, nt =self.actor_ft.forward(xt, t, cond, False, i)
+            vt=self.actor_ft.forward(xt, t, cond)
             xt += vt* dt
             if clip_intermediate_actions: #Discourage excessive exploration, but may also slow down convergence. 
                 xt = xt.clamp(-self.denoised_clip_value, self.denoised_clip_value)
             
-            # add noise during training, also prevent too deterministic policies
-            std = nt.unsqueeze(-1).reshape(xt.shape)
-            std = torch.clamp(std, min=self.min_sampling_denoising_std)    # each value in [self.min_sampling_denoising_std, self.max_logprob_denoising_std]
+            # add noise during training, but prevent too large noises. 
+            std = self.stochastic_interpolate(t).unsqueeze(-1).unsqueeze(-1).repeat(1, *xt.shape[1:])
+            std = torch.clamp(std, min=self.min_sampling_denoising_std)
             
             dist = Normal(xt, std)
             if not eval_mode:

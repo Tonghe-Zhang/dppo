@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing import Tuple, List
 log = logging.getLogger(__name__)
-from model.flow.mlp_flow import FlowMLP
 from collections import namedtuple
 
 Sample = namedtuple("Sample", "trajectories chains")
@@ -65,8 +64,7 @@ class ReFlow(nn.Module):
     
     def sample_time(self, time_sample_type='uniform', **kwargs):
         """
-        generate samples of a distribution in [0, 1]
-        
+        generate samples of a distribution in [0, 1)
         """
         supported_time_sample_type =['uniform', 'logitnormal', 'beta']
         if time_sample_type=='uniform':
@@ -74,18 +72,17 @@ class ReFlow(nn.Module):
         elif time_sample_type=='logitnormal':
             m = kwargs.get("m", 0)  # Default mean is 0
             s = kwargs.get("s", 1)  # Default standard deviation is 1
-            # Generate normal samples
-            normal_samples = torch.normal(mean=m, std=s, size=(self.batch_size,), device=self.device)
-            # Apply the logistic function
-            logit_normal_samples = (1 / (1 + torch.exp(-normal_samples))).to(self.device)
-            
+            normal_samples = torch.normal(mean=m, std=s, size=(self.batch_size,), device=self.device)# Generate normal samples
+            logit_normal_samples = (1 / (1 + torch.exp(-normal_samples))).to(self.device)# Apply the logistic function
             return logit_normal_samples
         elif time_sample_type=='beta':
-            alpha = kwargs.get("alpha", 2.0)  # Default alpha parameter
-            beta = kwargs.get("beta", 2.0)    # Default beta parameter
+            alpha = kwargs.get("alpha", 1.5)  # Default alpha parameter
+            beta = kwargs.get("beta", 1.0)    # Default beta parameter
+            s = kwargs.get("s", 0.999)  # Default cutoff deviation is 0.999
             beta_distribution = torch.distributions.Beta(alpha, beta)
             beta_sample = beta_distribution.sample((self.batch_size,)).to(self.device)
-            return beta_sample
+            tau = s * (1 - beta_sample)
+            return tau
         else:
             raise ValueError(f'Unknown time_sample_type = {time_sample_type}. We only support {supported_time_sample_type}')
         
@@ -121,10 +118,6 @@ class ReFlow(nn.Module):
         
         # generate target
         v =x1-x0
-
-        # print(f"xt.shape={xt.shape}")
-        # print(f"t.shape={t.shape}")
-        # print(f"obs.shape={obs.shape}")
         
         return (xt, t), v
     
@@ -148,8 +141,6 @@ class ReFlow(nn.Module):
             if `record_intermediate` is False, xt. tensor of shape `self.data_shape`
             if `record_intermediate` is True,  xt_list. tensor of shape `[num_steps,self.data_shape]`
         '''
-        
-        obs = cond['state']
         if inference_batch_size is None:
             inference_batch_size=self.batch_size
         

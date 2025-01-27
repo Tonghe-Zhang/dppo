@@ -1,24 +1,33 @@
 
 
+3906934
+
+trying to reproduce 0125 results 2829
+
+nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp_noiseless device=cuda:6 >hopper-reflow-ppo-reproduce-2829-denoise=4.log 2>&1 &
 
 
 
 
 
+3900883
+
+trying to compare 0125 results 2829 when denoising steps increase to 20.
+
+nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp_noiseless device=
+cuda:7 &
+
+########################
 
 (mujoco_py) (base) zhangtonghe@eva6-zhangtonghe:~/dppo$ nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device
 =cuda:6 >flowppo_hopper_2.7k.log 2>&1 &
 [1] 2709882
 
-
-accelerates initial results, but gets bad when after 100 iters. 
+accelerates initial results, but gets bad when after 100 iters.
 
 python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:5 wandb=null train.actor_lr=3e-5
 
 (actually warmup from 1e-5 to 3e-5)
-
-
-
 
 ######################################
 
@@ -26,29 +35,9 @@ this one is a bit too much
 
 python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:5 wandb=null train.actor_lr=1e-4
 
-
-
 Only enlarging the clip_ploss_coef from 0.01 to 0.03 significantly compromises performance
 
 python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:4 wandb=null train.actor_lr=3e-5 model.clip_ploss_coef=0.03
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 2208193
 

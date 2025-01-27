@@ -311,10 +311,7 @@ class TrainPPOAgent(TrainAgent):
                 "explained_var": explained_var,
             }
 
-        
-    
-    
-    def log(self, train_prt_str_additional="", train_log_dict_additional={}, pad=75):
+    def log(self, train_prt_str_additional="", train_log_dict_additional={}):
         '''
         train_prt_str_additional: str, additional information in training that will be printed to log console that is not included in train_prt_str_basic
         train_log_dict_additional: dict, additional information in training that will be logged to wandb that is not included in train_log_dict_basic
@@ -387,7 +384,7 @@ class TrainPPOAgent(TrainAgent):
                     f"""Critic lr: {self.critic_optimizer.param_groups[0]["lr"]:.2e}\n"""
                 )
                 
-                formatted_items = [f"{key}: {value:.5f}" for key, value in self.train_ret_dict.items()]
+                formatted_items = [f"{key}: {value:.3e}" for key, value in self.train_ret_dict.items()]
                 num_items_per_row = 10
                 for i in range(0, len(formatted_items), num_items_per_row):
                     train_prt_str_basic += " | ".join(formatted_items[i:i+num_items_per_row]) + "\n"

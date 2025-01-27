@@ -1,8 +1,6 @@
 """
-MLP models for diffusion policies.
-
+MLP models for flow-matching policies.
 """
-
 import torch
 import torch.nn as nn
 import logging
@@ -15,87 +13,9 @@ from model.common.modules import SpatialEmb, RandomShiftsAug
 
 log = logging.getLogger(__name__)
 
-class DiffusionMLP(nn.Module):
-    def __init__(
-        self,
-        action_dim,
-        horizon_steps,
-        cond_dim,
-        time_dim=16,
-        mlp_dims=[256, 256],
-        cond_mlp_dims=None,
-        activation_type="Mish",
-        out_activation_type="Identity",
-        use_layernorm=False,
-        residual_style=False,
-    ):
-        super().__init__()
-        output_dim = action_dim * horizon_steps
-        self.time_embedding = nn.Sequential(
-            SinusoidalPosEmb(time_dim),
-            nn.Linear(time_dim, time_dim * 2),
-            nn.Mish(),
-            nn.Linear(time_dim * 2, time_dim),
-        )
-        if residual_style:
-            model = ResidualMLP
-        else:
-            model = MLP
-        if cond_mlp_dims is not None:
-            self.cond_mlp = MLP(
-                [cond_dim] + cond_mlp_dims,
-                activation_type=activation_type,
-                out_activation_type="Identity",
-            )
-            input_dim = time_dim + action_dim * horizon_steps + cond_mlp_dims[-1]
-        else:
-            input_dim = time_dim + action_dim * horizon_steps + cond_dim
-        self.mlp_mean = model(
-            [input_dim] + mlp_dims + [output_dim],
-            activation_type=activation_type,
-            out_activation_type=out_activation_type,
-            use_layernorm=use_layernorm,
-        )
-        self.time_dim = time_dim
 
-    def forward(
-        self,
-        x,
-        time,
-        cond,
-        **kwargs,
-    ):
-        """
-        x: (B, Ta, Da)
-        time: (B,) or int, diffusion step
-        cond: dict with key state/rgb; more recent obs at the end
-            state: (B, To, Do)
-        """
-        B, Ta, Da = x.shape
-
-        # flatten chunk
-        x = x.view(B, -1)
-
-        # flatten history
-        state = cond["state"].view(B, -1)
-
-        # obs encoder
-        if hasattr(self, "cond_mlp"):
-            state = self.cond_mlp(state)
-
-        # append time and cond
-        time_emb = self.time_embedding(time.view(B, 1)).view(B, self.time_dim)
-        x = torch.cat([x, time_emb, state], dim=-1)
-
-        # mlp head
-        out = self.mlp_mean(x)
-        return out.view(B, Ta, Da)
-
-
-
-class VisionDiffusionMLP(nn.Module):
+class VisionFlowMLP(nn.Module):
     """With ViT backbone"""
-
     def __init__(
         self,
         backbone,
@@ -104,6 +24,7 @@ class VisionDiffusionMLP(nn.Module):
         cond_dim,
         img_cond_steps=1,
         time_dim=16,
+        dt_base_dim=16,
         mlp_dims=[256, 256],
         activation_type="Mish",
         out_activation_type="Identity",
@@ -152,11 +73,14 @@ class VisionDiffusionMLP(nn.Module):
                 nn.ReLU(),
             )
 
-        # diffusion
+        # we time two because we 
         input_dim = (
-            time_dim + action_dim * horizon_steps + visual_feature_dim + cond_dim
+            time_dim + dt_base_dim+ action_dim * horizon_steps + visual_feature_dim + cond_dim
         )
+        
+        
         output_dim = action_dim * horizon_steps
+        
         self.time_embedding = nn.Sequential(
             SinusoidalPosEmb(time_dim),
             nn.Linear(time_dim, time_dim * 2),
@@ -167,6 +91,7 @@ class VisionDiffusionMLP(nn.Module):
             model = ResidualMLP
         else:
             model = MLP
+        
         self.mlp_mean = model(
             [input_dim] + mlp_dims + [output_dim],
             activation_type=activation_type,
@@ -179,12 +104,14 @@ class VisionDiffusionMLP(nn.Module):
         self,
         x,
         time,
+        dt_base,
         cond: dict,
         **kwargs,
     ):
         """
         x: (B, Ta, Da)
-        time: (B,) or int, diffusion step
+        time: (B,) or int, denoising step
+        dt_base: (B,) or int, log2 of number of steps for generation. 
         cond: dict with key state/rgb; more recent obs at the end
             state: (B, To, Do)
             rgb: (B, To, C, H, W)
@@ -238,12 +165,114 @@ class VisionDiffusionMLP(nn.Module):
                 feat = self.compress(feat)
         cond_encoded = torch.cat([feat, state], dim=-1)
 
-        # append time and cond
+        # append time, dt_based, and cond
         time = time.view(B, 1)
         time_emb = self.time_embedding(time).view(B, self.time_dim)
-        x = torch.cat([x, time_emb, cond_encoded], dim=-1)
+        
+        dt_base = dt_base.view(B, 1)
+        dt_base_emb = self.time_embedding(dt_base).view(B, self.time_dim)
+        
+        x = torch.cat([x, time_emb, dt_base_emb, cond_encoded], dim=-1)
 
         # mlp
         out = self.mlp_mean(x)
         return out.view(B, Ta, Da)
 
+
+class FlowMLP(nn.Module):
+    ''' 
+    simple mlp block without visual inputs. 
+    '''
+    def __init__(
+        self,
+        action_dim,
+        horizon_steps,
+        cond_dim,
+        time_dim=16,
+        dt_base_dim=16,
+        mlp_dims=[256, 256],
+        cond_mlp_dims=None,
+        activation_type="Mish",
+        out_activation_type="Identity",
+        use_layernorm=False,
+        residual_style=False,
+    ):
+        super().__init__()
+        output_dim = action_dim * horizon_steps
+        
+        self.time_embedding = nn.Sequential(
+            SinusoidalPosEmb(time_dim),
+            nn.Linear(time_dim, time_dim * 2),
+            nn.Mish(),
+            nn.Linear(time_dim * 2, time_dim),
+        )
+        
+        self.dt_base_embedding = nn.Sequential(
+            SinusoidalPosEmb(dt_base_dim),
+            nn.Linear(dt_base_dim, dt_base_dim * 2),
+            nn.Mish(),
+            nn.Linear(dt_base_dim * 2, dt_base_dim),
+        )
+
+        if residual_style:
+            model = ResidualMLP
+        else:
+            model = MLP
+        if cond_mlp_dims is not None:
+            self.cond_mlp = MLP(
+                [cond_dim] + cond_mlp_dims,
+                activation_type=activation_type,
+                out_activation_type="Identity",
+            )
+            input_dim = time_dim + dt_base_dim + action_dim * horizon_steps + cond_mlp_dims[-1]
+        else:
+            input_dim = time_dim + dt_base_dim + action_dim * horizon_steps + cond_dim
+        self.mlp_mean = model(
+            [input_dim] + mlp_dims + [output_dim],
+            activation_type=activation_type,
+            out_activation_type=out_activation_type,
+            use_layernorm=use_layernorm,
+        )
+        self.time_dim = time_dim
+        self.dt_base_dim = dt_base_dim
+        
+        # print(f"self.mlp_mean={self.mlp_mean}")
+
+    def forward(
+        self,
+        x,
+        time,
+        dt_base,
+        cond,
+        **kwargs,
+    ):
+        """
+        x: (B, Ta, Da)
+        time: (B,) or int, denoising time
+        dt_base: (B,) or int, denoising step number (log scale)
+        cond: Tensor of shape (B, To, Do), recent obs at the end
+        """
+        B, Ta, Da = x.shape
+
+        # flatten chunk
+        x = x.view(B, -1)
+
+        # flatten history
+        state = cond.view(B, -1)
+
+        # obs encoder
+        if hasattr(self, "cond_mlp"):
+            state = self.cond_mlp(state)
+
+        # append time, dt_base, and cond
+        time = time.view(B, 1)
+        
+        time_emb = self.time_embedding(time).view(B, self.time_dim)
+        
+        dt_base_emb = self.dt_base_embedding(dt_base).view(B, self.dt_base_dim)      
+        
+        x = torch.cat([x, time_emb, dt_base_emb, state], dim=-1)
+
+        # mlp head
+        out = self.mlp_mean(x)
+        return out.view(B, Ta, Da)

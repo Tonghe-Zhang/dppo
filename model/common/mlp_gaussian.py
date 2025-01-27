@@ -11,6 +11,118 @@ from copy import deepcopy
 from model.common.mlp import MLP, ResidualMLP
 from model.common.modules import SpatialEmb, RandomShiftsAug
 
+class Gaussian_MLP(nn.Module):
+    def __init__(
+        self,
+        action_dim,
+        horizon_steps,
+        cond_dim,
+        mlp_dims=[256, 256, 256],
+        activation_type="Mish",
+        tanh_output=True,  # sometimes we want to apply tanh after sampling instead of here, e.g., in SAC
+        residual_style=False,
+        use_layernorm=False,
+        dropout=0.0,
+        fixed_std=None,
+        learn_fixed_std=False,
+        std_min=0.01,
+        std_max=1,
+    ):
+        super().__init__()
+        self.action_dim = action_dim
+        self.horizon_steps = horizon_steps
+        input_dim = cond_dim
+        output_dim = action_dim * horizon_steps
+        if residual_style:
+            model = ResidualMLP
+        else:
+            model = MLP
+        if fixed_std is None:
+            # learning std
+            self.mlp_base = model(
+                [input_dim] + mlp_dims,
+                activation_type=activation_type,
+                out_activation_type=activation_type,
+                use_layernorm=use_layernorm,
+                use_layernorm_final=use_layernorm,
+                dropout=dropout,
+            )
+            self.mlp_mean = MLP(
+                mlp_dims[-1:] + [output_dim],
+                out_activation_type="Identity",
+            )
+            self.mlp_logvar = MLP(
+                mlp_dims[-1:] + [output_dim],
+                out_activation_type="Identity",
+            )
+        else:
+            # no separate head for mean and std
+            self.mlp_mean = model(
+                [input_dim] + mlp_dims + [output_dim],
+                activation_type=activation_type,
+                out_activation_type="Identity",
+                use_layernorm=use_layernorm,
+                dropout=dropout,
+            )
+            if learn_fixed_std:
+                # initialize to fixed_std
+                self.logvar = torch.nn.Parameter(
+                    torch.log(torch.tensor([fixed_std**2 for _ in range(action_dim)])),
+                    requires_grad=True,
+                )
+        self.logvar_min = torch.nn.Parameter(
+            torch.log(torch.tensor(std_min**2)), requires_grad=False
+        )
+        self.logvar_max = torch.nn.Parameter(
+            torch.log(torch.tensor(std_max**2)), requires_grad=False
+        )
+        self.use_fixed_std = fixed_std is not None
+        self.fixed_std = fixed_std
+        self.learn_fixed_std = learn_fixed_std
+        self.tanh_output = tanh_output
+
+    def forward(self, cond):
+        B = len(cond["state"])
+        device = cond["state"].device
+
+        # flatten history
+        state = cond["state"].view(B, -1)
+
+        # mlp head, an encoder shared by mean and std calculation 
+        if hasattr(self, "mlp_base"):
+            state = self.mlp_base(state)
+        
+        # get action mean
+        out_mean = self.mlp_mean(state)
+        if self.tanh_output:
+            out_mean = torch.tanh(out_mean)
+        out_mean = out_mean.view(B, self.horizon_steps * self.action_dim)
+
+        # get action std
+        if self.learn_fixed_std:
+            out_logvar = torch.clamp(self.logvar, self.logvar_min, self.logvar_max)
+            out_scale = torch.exp(0.5 * out_logvar)
+            out_scale = out_scale.view(1, self.action_dim)
+            out_scale = out_scale.repeat(B, self.horizon_steps)
+        elif self.use_fixed_std:
+            out_scale = torch.ones_like(out_mean).to(device) * self.fixed_std
+        else:
+            # control logvar as a bounded variable in [self.logvar_min, self.logvar_max] without explicitly clipping
+            out_logvar = self.mlp_logvar(state).view(
+                B, self.horizon_steps * self.action_dim
+            )
+            out_logvar = torch.tanh(out_logvar)
+            out_logvar = self.logvar_min + 0.5 * (self.logvar_max - self.logvar_min) * (
+                out_logvar + 1
+            )  # put back to full range
+            out_scale = torch.exp(0.5 * out_logvar)
+        
+        return out_mean, out_scale
+
+
+
+
+
 
 class Gaussian_VisionMLP(nn.Module):
     """With ViT backbone"""
@@ -177,113 +289,3 @@ class Gaussian_VisionMLP(nn.Module):
             out_scale = torch.exp(0.5 * out_logvar)
         return out_mean, out_scale
 
-
-class Gaussian_MLP(nn.Module):
-    def __init__(
-        self,
-        action_dim,
-        horizon_steps,
-        cond_dim,
-        mlp_dims=[256, 256, 256],
-        activation_type="Mish",
-        tanh_output=True,  # sometimes we want to apply tanh after sampling instead of here, e.g., in SAC
-        residual_style=False,
-        use_layernorm=False,
-        dropout=0.0,
-        fixed_std=None,
-        learn_fixed_std=False,
-        std_min=0.01,
-        std_max=1,
-    ):
-        super().__init__()
-        self.action_dim = action_dim
-        self.horizon_steps = horizon_steps
-        input_dim = cond_dim
-        output_dim = action_dim * horizon_steps
-        if residual_style:
-            model = ResidualMLP
-        else:
-            model = MLP
-        if fixed_std is None:
-            # learning std
-            self.mlp_base = model(
-                [input_dim] + mlp_dims,
-                activation_type=activation_type,
-                out_activation_type=activation_type,
-                use_layernorm=use_layernorm,
-                use_layernorm_final=use_layernorm,
-                dropout=dropout,
-            )
-            self.mlp_mean = MLP(
-                mlp_dims[-1:] + [output_dim],
-                out_activation_type="Identity",
-            )
-            self.mlp_logvar = MLP(
-                mlp_dims[-1:] + [output_dim],
-                out_activation_type="Identity",
-            )
-        else:
-            # no separate head for mean and std
-            self.mlp_mean = model(
-                [input_dim] + mlp_dims + [output_dim],
-                activation_type=activation_type,
-                out_activation_type="Identity",
-                use_layernorm=use_layernorm,
-                dropout=dropout,
-            )
-            if learn_fixed_std:
-                # initialize to fixed_std
-                self.logvar = torch.nn.Parameter(
-                    torch.log(torch.tensor([fixed_std**2 for _ in range(action_dim)])),
-                    requires_grad=True,
-                )
-        self.logvar_min = torch.nn.Parameter(
-            torch.log(torch.tensor(std_min**2)), requires_grad=False
-        )
-        self.logvar_max = torch.nn.Parameter(
-            torch.log(torch.tensor(std_max**2)), requires_grad=False
-        )
-        self.use_fixed_std = fixed_std is not None
-        self.fixed_std = fixed_std
-        self.learn_fixed_std = learn_fixed_std
-        self.tanh_output = tanh_output
-
-    def forward(self, cond):
-        B = len(cond["state"])
-        device = cond["state"].device
-
-        # flatten history
-        state = cond["state"].view(B, -1)
-
-        # mlp head, an encoder shared by mean and std calculation 
-        if hasattr(self, "mlp_base"):
-            state = self.mlp_base(state)
-        
-        # get action mean
-        out_mean = self.mlp_mean(state)
-        if self.tanh_output:
-            out_mean = torch.tanh(out_mean)
-        out_mean = out_mean.view(B, self.horizon_steps * self.action_dim)
-
-        
-        # get action std
-        if self.learn_fixed_std:
-            out_logvar = torch.clamp(self.logvar, self.logvar_min, self.logvar_max)
-            out_scale = torch.exp(0.5 * out_logvar)
-            out_scale = out_scale.view(1, self.action_dim)
-            out_scale = out_scale.repeat(B, self.horizon_steps)
-        elif self.use_fixed_std:
-            out_scale = torch.ones_like(out_mean).to(device) * self.fixed_std
-        else:
-            # control logvar as a bounded variable in [self.logvar_min, self.logvar_max] without explicitly clipping
-            out_logvar = self.mlp_logvar(state).view(
-                B, self.horizon_steps * self.action_dim
-            )
-            out_logvar = torch.tanh(out_logvar)
-            out_logvar = self.logvar_min + 0.5 * (self.logvar_max - self.logvar_min) * (
-                out_logvar + 1
-            )  # put back to full range
-            out_scale = torch.exp(0.5 * out_logvar)
-        
-        
-        return out_mean, out_scale

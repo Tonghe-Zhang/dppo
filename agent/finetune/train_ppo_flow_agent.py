@@ -129,6 +129,9 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 if verbose:
                     log.info(f"update_epoch={update_epoch}/{self.update_epochs}, batch_id={batch_id}/{max(1, self.total_steps // self.batch_size)}, ratio={ratio:.3f}, clipfrac={clipfrac:.3f}, approx_kl={approx_kl:.2e}")
                 
+                if update_epoch ==0  and batch_id ==0 and np.abs(ratio-1.00)>1e-6:
+                    raise ValueError(f"ratio={ratio} not 1.00 when update_epoch ==0  and batch_id ==0, there must be some bugs in your code not related to hyperparameters !")
+                
                 if self.target_kl and self.lr_schedule == 'adaptive_kl':
                     self.update_lr_adaptive_kl(approx_kl)
                 

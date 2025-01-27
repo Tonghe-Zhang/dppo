@@ -1,195 +1,26 @@
 """
-MLP models for flow-matching policies.
+MLP models for flow matching with learnable stochastic interpolate noise. 
 """
 import torch
 import torch.nn as nn
 import logging
 import einops
 from copy import deepcopy
-
+from typing import Tuple
+from torch import Tensor
 from model.common.mlp import MLP, ResidualMLP
 from model.diffusion.modules import SinusoidalPosEmb
 from model.common.modules import SpatialEmb, RandomShiftsAug
-
 log = logging.getLogger(__name__)
 
 
-class VisionFlowMLP(nn.Module):
-    """With ViT backbone"""
-    def __init__(
-        self,
-        backbone,
-        action_dim,
-        horizon_steps,
-        cond_dim,
-        img_cond_steps=1,
-        time_dim=16,
-        dt_base_dim=16,
-        mlp_dims=[256, 256],
-        activation_type="Mish",
-        out_activation_type="Identity",
-        use_layernorm=False,
-        residual_style=False,
-        spatial_emb=0,
-        visual_feature_dim=128,
-        dropout=0,
-        num_img=1,
-        augment=False,
-    ):
-        super().__init__()
-
-        # vision
-        self.backbone = backbone
-        if augment:
-            self.aug = RandomShiftsAug(pad=4)
-        self.augment = augment
-        self.num_img = num_img
-        self.img_cond_steps = img_cond_steps
-        if spatial_emb > 0:
-            assert spatial_emb > 1, "this is the dimension"
-            if num_img > 1:
-                self.compress1 = SpatialEmb(
-                    num_patch=self.backbone.num_patch,
-                    patch_dim=self.backbone.patch_repr_dim,
-                    prop_dim=cond_dim,
-                    proj_dim=spatial_emb,
-                    dropout=dropout,
-                )
-                self.compress2 = deepcopy(self.compress1)
-            else:  # TODO: clean up
-                self.compress = SpatialEmb(
-                    num_patch=self.backbone.num_patch,
-                    patch_dim=self.backbone.patch_repr_dim,
-                    prop_dim=cond_dim,
-                    proj_dim=spatial_emb,
-                    dropout=dropout,
-                )
-            visual_feature_dim = spatial_emb * num_img
-        else:
-            self.compress = nn.Sequential(
-                nn.Linear(self.backbone.repr_dim, visual_feature_dim),
-                nn.LayerNorm(visual_feature_dim),
-                nn.Dropout(dropout),
-                nn.ReLU(),
-            )
-
-        # we time two because we 
-        input_dim = (
-            time_dim + dt_base_dim+ action_dim * horizon_steps + visual_feature_dim + cond_dim
-        )
-        
-        
-        output_dim = action_dim * horizon_steps
-        
-        self.time_embedding = nn.Sequential(
-            SinusoidalPosEmb(time_dim),
-            nn.Linear(time_dim, time_dim * 2),
-            nn.Mish(),
-            nn.Linear(time_dim * 2, time_dim),
-        )
-        if residual_style:
-            model = ResidualMLP
-        else:
-            model = MLP
-        
-        self.mlp_mean = model(
-            [input_dim] + mlp_dims + [output_dim],
-            activation_type=activation_type,
-            out_activation_type=out_activation_type,
-            use_layernorm=use_layernorm,
-        )
-        self.time_dim = time_dim
-
-    def forward(
-        self,
-        x,
-        time,
-        dt_base,
-        cond: dict,
-        **kwargs,
-    ):
-        """
-        x: (B, Ta, Da)
-        time: (B,) or int, denoising step
-        dt_base: (B,) or int, log2 of number of steps for generation. 
-        cond: dict with key state/rgb; more recent obs at the end
-            state: (B, To, Do)
-            rgb: (B, To, C, H, W)
-
-        TODO long term: more flexible handling of cond
-        """
-        B, Ta, Da = x.shape
-        _, T_rgb, C, H, W = cond["rgb"].shape
-
-        # flatten chunk
-        x = x.view(B, -1)
-
-        # flatten history
-        state = cond["state"].view(B, -1)
-
-        # Take recent images --- sometimes we want to use fewer img_cond_steps than cond_steps (e.g., 1 image but 3 prio)
-        rgb = cond["rgb"][:, -self.img_cond_steps :]
-
-        # concatenate images in cond by channels
-        if self.num_img > 1:
-            rgb = rgb.reshape(B, T_rgb, self.num_img, 3, H, W)
-            rgb = einops.rearrange(rgb, "b t n c h w -> b n (t c) h w")
-        else:
-            rgb = einops.rearrange(rgb, "b t c h w -> b (t c) h w")
-
-        # convert rgb to float32 for augmentation
-        rgb = rgb.float()
-
-        # get vit output - pass in two images separately
-        if self.num_img > 1:  # TODO: properly handle multiple images
-            rgb1 = rgb[:, 0]
-            rgb2 = rgb[:, 1]
-            if self.augment:
-                rgb1 = self.aug(rgb1)
-                rgb2 = self.aug(rgb2)
-            feat1 = self.backbone(rgb1)
-            feat2 = self.backbone(rgb2)
-            feat1 = self.compress1.forward(feat1, state)
-            feat2 = self.compress2.forward(feat2, state)
-            feat = torch.cat([feat1, feat2], dim=-1)
-        else:  # single image
-            if self.augment:
-                rgb = self.aug(rgb)
-            feat = self.backbone(rgb)
-
-            # compress
-            if isinstance(self.compress, SpatialEmb):
-                feat = self.compress.forward(feat, state)
-            else:
-                feat = feat.flatten(1, -1)
-                feat = self.compress(feat)
-        cond_encoded = torch.cat([feat, state], dim=-1)
-
-        # append time, dt_based, and cond
-        time = time.view(B, 1)
-        time_emb = self.time_embedding(time).view(B, self.time_dim)
-        
-        dt_base = dt_base.view(B, 1)
-        dt_base_emb = self.time_embedding(dt_base).view(B, self.time_dim)
-        
-        x = torch.cat([x, time_emb, dt_base_emb, cond_encoded], dim=-1)
-
-        # mlp
-        out = self.mlp_mean(x)
-        return out.view(B, Ta, Da)
-
-
 class FlowMLP(nn.Module):
-    ''' 
-    simple mlp block without visual inputs. 
-    '''
     def __init__(
         self,
-        action_dim,
         horizon_steps,
+        action_dim,
         cond_dim,
         time_dim=16,
-        dt_base_dim=16,
         mlp_dims=[256, 256],
         cond_mlp_dims=None,
         activation_type="Mish",
@@ -198,8 +29,18 @@ class FlowMLP(nn.Module):
         residual_style=False,
     ):
         super().__init__()
-        output_dim = action_dim * horizon_steps
-        
+        self.time_dim = time_dim
+        self.act_dim_total = action_dim * horizon_steps
+        self.horizon_steps = horizon_steps
+        self.action_dim=action_dim
+        self.cond_dim=cond_dim
+        self.time_dim=time_dim
+        self.mlp_dims=mlp_dims
+        self.activation_type=activation_type
+        self.out_activation_type=out_activation_type
+        self.use_layernorm=use_layernorm
+        self.residual_style=residual_style
+
         self.time_embedding = nn.Sequential(
             SinusoidalPosEmb(time_dim),
             nn.Linear(time_dim, time_dim * 2),
@@ -207,72 +48,202 @@ class FlowMLP(nn.Module):
             nn.Linear(time_dim * 2, time_dim),
         )
         
-        self.dt_base_embedding = nn.Sequential(
-            SinusoidalPosEmb(dt_base_dim),
-            nn.Linear(dt_base_dim, dt_base_dim * 2),
-            nn.Mish(),
-            nn.Linear(dt_base_dim * 2, dt_base_dim),
-        )
-
-        if residual_style:
-            model = ResidualMLP
-        else:
-            model = MLP
-        if cond_mlp_dims is not None:
+        model = ResidualMLP if residual_style else MLP
+        
+        # obs encoder
+        if cond_mlp_dims:
             self.cond_mlp = MLP(
                 [cond_dim] + cond_mlp_dims,
                 activation_type=activation_type,
                 out_activation_type="Identity",
             )
-            input_dim = time_dim + dt_base_dim + action_dim * horizon_steps + cond_mlp_dims[-1]
+            self.cond_enc_dim = cond_mlp_dims[-1]
         else:
-            input_dim = time_dim + dt_base_dim + action_dim * horizon_steps + cond_dim
+            self.cond_enc_dim = cond_dim
+        input_dim = time_dim + action_dim * horizon_steps + self.cond_enc_dim
+        
+        # velocity head
         self.mlp_mean = model(
-            [input_dim] + mlp_dims + [output_dim],
+            [input_dim] + mlp_dims + [self.act_dim_total],
             activation_type=activation_type,
             out_activation_type=out_activation_type,
             use_layernorm=use_layernorm,
         )
-        self.time_dim = time_dim
-        self.dt_base_dim = dt_base_dim
-        
-        # print(f"self.mlp_mean={self.mlp_mean}")
 
     def forward(
         self,
-        x,
+        action,
         time,
-        dt_base,
         cond,
+        output_embedding=False,
         **kwargs,
     ):
         """
         x: (B, Ta, Da)
-        time: (B,) or int, denoising time
-        dt_base: (B,) or int, denoising step number (log scale)
-        cond: Tensor of shape (B, To, Do), recent obs at the end
+        time: (B,) or int, diffusion step
+        cond: dict with key state/rgb; more recent obs at the end
+            state: (B, To, Do)
         """
-        B, Ta, Da = x.shape
+        B, Ta, Da = action.shape
 
-        # flatten chunk
-        x = x.view(B, -1)
+        # flatten action chunk
+        action = action.view(B, -1)
 
-        # flatten history
-        state = cond.view(B, -1)
+        # flatten obs history
+        state = cond["state"].view(B, -1)
 
         # obs encoder
-        if hasattr(self, "cond_mlp"):
-            state = self.cond_mlp(state)
+        cond_emb = self.cond_mlp(state) if hasattr(self, "cond_mlp") else state
+        
+        # time encoder
+        time_emb = self.time_embedding(time.view(B, 1)).view(B, self.time_dim)
+        
+        # velocity head
+        feature_vel = torch.cat([action, time_emb, cond_emb], dim=-1)
+        vel = self.mlp_mean(feature_vel)
+        
+        if output_embedding:
+            return vel.view(B, Ta, Da), time_emb, cond_emb
+        return vel.view(B, Ta, Da)
 
-        # append time, dt_base, and cond
-        time = time.view(B, 1)
+class NoisyFlowMLP(nn.Module):
+    def __init__(
+        self,
+        policy:FlowMLP,
+        denoising_steps,
+        learn_explore_noise_from,
+        inital_noise_scheduler_type,
+        min_logprob_denoising_std,
+        max_logprob_denoising_std,
+        learn_explore_time_embedding,
+        init_time_embedding,
+        time_dim_explore,
+        device
+    ):
+        super().__init__()
+        self.device=device
+        self.policy = policy.to(self.device)
+        ''''
+        input:  [batchsize, time_dim + cond_enc_dim]    log \sigma (t,s)
+        output: positive tensor of shape [batchsize, self.denoising_steps, self.horizon_steps x self.act_dim]
+        '''
+        self.denoising_steps: int = denoising_steps
+        self.learn_explore_noise_from: int = learn_explore_noise_from
+        self.initial_noise_scheduler_type: str = inital_noise_scheduler_type
+        self.min_logprob_denoising_std: float = min_logprob_denoising_std
+        self.max_logprob_denoising_std: float = max_logprob_denoising_std
         
-        time_emb = self.time_embedding(time).view(B, self.time_dim)
+        self.logvar_min = torch.nn.Parameter(torch.log(torch.tensor(self.min_logprob_denoising_std**2, dtype=torch.float32, device=self.device)), requires_grad=False)
+        self.logvar_max = torch.nn.Parameter(torch.log(torch.tensor(self.max_logprob_denoising_std**2, dtype=torch.float32, device=self.device)), requires_grad=False)
+        self.learn_explore_time_embedding: bool  = learn_explore_time_embedding
+        self.init_time_embedding: bool = init_time_embedding
+        self.set_logprob_noise_levels()
         
-        dt_base_emb = self.dt_base_embedding(dt_base).view(B, self.dt_base_dim)      
+        input_dim_noise = time_dim_explore + self.policy.cond_enc_dim if self.learn_explore_time_embedding else self.policy.time_dim + self.policy.cond_enc_dim
         
-        x = torch.cat([x, time_emb, dt_base_emb, state], dim=-1)
-
-        # mlp head
-        out = self.mlp_mean(x)
-        return out.view(B, Ta, Da)
+        self.mlp_logvar = MLP(
+            [input_dim_noise] + [self.policy.act_dim_total],
+            out_activation_type="Identity",
+        ).to(self.device)
+        
+        if self.learn_explore_time_embedding:
+            self.time_embedding_explore = nn.Embedding(self.denoising_steps, time_dim_explore,device=self.device)
+            if self.init_time_embedding:
+                self.init_embedding(embedding = self.time_embedding_explore, device=self.device, init_type ='lin', k=0.1, b=0.0)
+    
+    def init_embedding(self, embedding:nn.Embedding, device, init_type:str, **kwargs):
+        num_embeddings = embedding.num_embeddings
+        embedding_dim  = embedding.embedding_dim
+        if init_type == 'lin':
+            k = kwargs["k"]
+            b = kwargs["b"]
+            with torch.no_grad():
+                for i in range(num_embeddings):
+                    embedding.weight[i] = torch.tensor([[k * i + b for _ in range(embedding_dim)]], device=device)
+        else:
+            raise ValueError(f"Unsupported init_type = {init_type}")
+        
+        log.info(f"Initialized embedding.weight")
+        if kwargs.get("verbose", False):
+            log.info(f"Initialized embedding.weight={embedding.weight}")
+        
+    def forward(
+        self,
+        action,
+        time,
+        cond,
+        learn_exploration_noise=False,
+        step=-1,
+        **kwargs,
+    )->Tuple[Tensor, Tensor]:
+        """
+        inputs:
+            x: (B, Ta, Da)
+            time: (B,) floating point in [0,1) flow matching time
+            cond: dict with key state/rgb; more recent obs at the end
+                state: (B, To, Do)
+            step: (B,) torch.tensor, optional, flow matching inference step, from 0 to denoising_steps-1
+        outputs:
+             vel                [B, Ta, Da]
+             noise_std          [B, Ta x Da]
+        """
+        B = action.shape[0]
+        vel, time_emb, cond_emb = self.policy.forward(action, time, cond, output_embedding=True)
+        
+        # noise head (for exploration). allow gradient flow.
+        
+        if step >= self.learn_explore_noise_from:
+            if self.learn_explore_time_embedding:
+                time_emb_explore = self.time_embedding_explore(torch.tensor(step).repeat(B).to(action.device))
+                feature_noise    = torch.cat([time_emb_explore, cond_emb], dim=-1)
+            else:
+                feature_noise    = torch.cat([time_emb.detach(), cond_emb], dim=-1)
+            
+            noise_logvar    = self.mlp_logvar(feature_noise)
+            noise_std       = self.process_noise(noise_logvar)
+        else:
+            noise_std       = self.logprob_noise_levels[step].repeat(B,1)
+        
+        if learn_exploration_noise:
+            return vel, noise_std
+        else:
+            return vel, noise_std.detach()
+    
+    def process_noise(self, noise_logvar):
+        '''
+        input:
+            torch.Tensor([B, Ta , Da])
+        output:
+            torch.Tensor([B, 1, Ta * Da]), floating point values, bounded in [min_logprob_denoising_std, max_logprob_denoising_std]
+        '''
+        noise_logvar = noise_logvar
+        noise_logvar = torch.tanh(noise_logvar)
+        noise_logvar = self.logvar_min + (self.logvar_max - self.logvar_min) * (noise_logvar + 1)/2.0
+        noise_std = torch.exp(0.5 * noise_logvar)
+        return noise_std
+    
+    @torch.no_grad()
+    def stochastic_interpolate(self,t):
+        if self.initial_noise_scheduler_type == 'vp':
+            a = 0.2 #2.0
+            std = torch.sqrt(a * t * (1 - t))
+        elif self.initial_noise_scheduler_type == 'lin':
+            k=0.1
+            b=0.0
+            std = k*t+b
+        else:
+            raise NotImplementedError
+        return std
+    
+    @torch.no_grad()
+    def set_logprob_noise_levels(self):
+        '''
+        create noise std for logrporbability calcualion. 
+        generate a tensor `self.logprob_noise_levels` of shape `[1, self.denoising_steps,  self.policy.horizion_steps x self.policy.act_dim]`
+        '''
+        self.logprob_noise_levels = torch.zeros(self.denoising_steps, device=self.device, requires_grad=False)
+        steps = torch.linspace(0, 1, self.denoising_steps, device=self.device)
+        for i, t in enumerate(steps):
+            self.logprob_noise_levels[i] = self.stochastic_interpolate(t)
+        self.logprob_noise_levels = self.logprob_noise_levels.clamp(min=self.min_logprob_denoising_std, max=self.max_logprob_denoising_std)
+        self.logprob_noise_levels = self.logprob_noise_levels.unsqueeze(0).unsqueeze(-1).repeat(1, 1, self.policy.horizon_steps *  self.policy.action_dim)
