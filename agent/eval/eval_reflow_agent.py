@@ -62,7 +62,7 @@ class EvalReFlowAgent(EvalAgent):
             self.plot_eval_statistics(statistics, self.eval_log_dir)
             return
         
-        self.denoising_steps = [1, 3, 4, 8, 16, 20, 32, 64, 128, 256]
+        self.denoising_steps = [20] #[1, 3, 4, 8, 16, 20, 32, 64]
         # Prepare video paths for each envs --- only applies for the first set of episodes if allowing reset within iteration and each iteration has multiple episodes from one env
         options_venv = [{} for _ in range(self.n_envs)]
         if self.render_video:
@@ -197,7 +197,7 @@ class EvalReFlowAgent(EvalAgent):
         plt.title('Average Episode Reward ')
         plt.xlabel('Number of Denoising Steps')
         plt.ylabel('Average Episode Reward')
-        plt.ylim([0, 1750])
+        # plt.ylim([0, 1750])
         plt.grid(True)
         plt.legend()
 
@@ -207,7 +207,7 @@ class EvalReFlowAgent(EvalAgent):
         plt.title('Average Trajectory Length ')
         plt.xlabel('Number of Denoising Steps')
         plt.ylabel('Average Trajectory Length')
-        plt.ylim([10, 120])
+        # plt.ylim() #[10, 120]
         plt.grid(True)
         plt.legend()
 
@@ -221,7 +221,7 @@ class EvalReFlowAgent(EvalAgent):
         plt.title('Average Best Reward ')
         plt.xlabel('Number of Denoising Steps')
         plt.ylabel('Average Best Reward')
-        plt.ylim([0, 6])
+        # plt.ylim([0, 6])
         plt.grid(True)
         plt.legend()
 
@@ -391,12 +391,14 @@ class EvalReFlowAgent(EvalAgent):
         log.info(
                 f"""
             ########################################
+            env:                 {self.env_name}
+            model:               {self.model.__class__.__name__}
             denois_step:         {num_denoising_steps}
-            avg_single_step_freq:{avg_single_step_freq:3.2f} ± {avg_single_step_freq_std:3.2f} HZ
-            avg_traj_length:     {avg_traj_length}
-            avg_episode_reward:  {avg_episode_reward:8.1f} ± {avg_episode_reward_std:2.1f}
-            avg_best_reward:     {avg_best_reward:8.1f} ± {avg_best_reward_std:2.1f}
-            num_episode:         {num_episodes_finished:4d} | success_rate: {success_rate:8.4f}
+            single_step_freq:    {avg_single_step_freq:3.2f} ± {avg_single_step_freq_std:3.2f} HZ
+            traj_length:         {avg_traj_length:8.1f}
+            episode_reward:      {avg_episode_reward:8.1f} ± {avg_episode_reward_std:2.1f}
+            best_reward:         {avg_best_reward:8.1f} ± {avg_best_reward_std:2.1f}
+            success_rate:        {success_rate*100:8.2f} %
             ########################################
             """
             )

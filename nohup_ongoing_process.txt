@@ -1,3 +1,8 @@
+
+
+python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp_learn_20 wandb=null device=cuda:6
+#####################3  
+
 3926046
 
 trying to reproduce 0125 results 2829 after extending codebase to allow learnable training.

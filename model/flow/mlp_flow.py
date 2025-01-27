@@ -147,7 +147,10 @@ class NoisyFlowMLP(nn.Module):
         ).to(self.device)
         
         if self.learn_explore_time_embedding:
-            self.time_embedding_explore = nn.Embedding(self.denoising_steps, time_dim_explore,device=self.device)
+            self.time_embedding_explore = nn.Embedding(num_embeddings=self.denoising_steps, 
+                                                       embedding_dim = time_dim_explore, 
+                                                       device=self.device)
+            
             if self.init_time_embedding:
                 self.init_embedding(embedding = self.time_embedding_explore, device=self.device, init_type ='lin', k=0.1, b=0.0)
     
@@ -192,10 +195,10 @@ class NoisyFlowMLP(nn.Module):
         vel, time_emb, cond_emb = self.policy.forward(action, time, cond, output_embedding=True)
         
         # noise head (for exploration). allow gradient flow.
-        
         if step >= self.learn_explore_noise_from:
             if self.learn_explore_time_embedding:
-                time_emb_explore = self.time_embedding_explore(torch.tensor(step).repeat(B).to(action.device))
+                step_ts = torch.tensor(step, device = self.device).repeat(B)
+                time_emb_explore = self.time_embedding_explore(step_ts)
                 feature_noise    = torch.cat([time_emb_explore, cond_emb], dim=-1)
             else:
                 feature_noise    = torch.cat([time_emb.detach(), cond_emb], dim=-1)

@@ -39,6 +39,7 @@ class PPOFlow(nn.Module):
                  denoised_clip_value,
                  max_logprob_denoising_std,
                  time_dim_explore,
+                 learn_explore_time_embedding,
                  learn_explore_noise_from,
                  init_time_embedding
                  ):
@@ -65,7 +66,7 @@ class PPOFlow(nn.Module):
                                     inital_noise_scheduler_type=noise_scheduler_type,
                                     min_logprob_denoising_std = min_logprob_denoising_std,
                                     max_logprob_denoising_std = max_logprob_denoising_std,
-                                    learn_explore_time_embedding=True,
+                                    learn_explore_time_embedding=learn_explore_time_embedding,
                                     init_time_embedding=init_time_embedding,
                                     time_dim_explore=time_dim_explore,
                                     device=device)
@@ -107,7 +108,12 @@ class PPOFlow(nn.Module):
         
         # clip intermediate actions during inference
         self.denoised_clip_value:float = denoised_clip_value
-    
+
+        log.info(f"self.actor_ft={self.actor_ft}")
+        log.info(f"self.critic={self.critic}")
+        
+        
+        
     def check_gradient_flow(self):
         print(f"{next(self.actor_ft.policy.parameters()).requires_grad}") #True
         print(f"{next(self.actor_ft.mlp_logvar.parameters()).requires_grad}")#True
@@ -125,6 +131,7 @@ class PPOFlow(nn.Module):
             model_data = torch.load(network_path, map_location=self.device, weights_only=True)
             actor_network_data = {k.replace("network.", ""): v for k, v in model_data["model"].items()}
             ema_actor_network_data = {k.replace("network.", ""): v for k, v in model_data["ema"].items()}
+            print(f"actor_network_data={actor_network_data.keys()}")
             if not use_ema:
                 self.actor_old.load_state_dict(actor_network_data)
                 logging.info("Loaded actor policy from %s", network_path)

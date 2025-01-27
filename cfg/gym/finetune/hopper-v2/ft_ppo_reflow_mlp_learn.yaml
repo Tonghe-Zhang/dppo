@@ -15,7 +15,7 @@ device: cuda:7
 env_name: hopper-medium-v2
 obs_dim: 11
 action_dim: 3
-denoising_steps: 4 #20 be careful, 20 denoising steps not sure yet even when not learning noiser net.
+denoising_steps: 20 # 4 be careful, 20 denoising steps not sure yet even when not learning noiser net.
 cond_steps: 1
 horizon_steps: 4
 act_steps: 4
@@ -124,8 +124,8 @@ model:
   clip_ploss_coef_rate: 3
   clip_vloss_coef: null
   denoised_clip_value: 1.0
-  max_logprob_denoising_std: 1.0    #new stuff
-  time_dim_explore: 0              # new stuff
-  learn_explore_time_embedding: False
-  learn_explore_noise_from: ${denoising_steps}       # new stuff. when selected as denoising steps, same as fix all noise.
+  max_logprob_denoising_std: 0.1    #new stuff
+  time_dim_explore: 16              # new stuff
+  learn_explore_time_embedding: True 
+  learn_explore_noise_from: 0      # new stuff. when selected as denoising steps, same as fix all noise.
   init_time_embedding: True

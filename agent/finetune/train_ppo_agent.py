@@ -1,8 +1,6 @@
 """
 Parent PPO fine-tuning agent class.
-
 """
-
 from typing import Optional
 import torch
 import logging
@@ -47,8 +45,6 @@ class TrainPPOAgent(TrainAgent):
             lr=cfg.train.actor_lr,
             weight_decay=cfg.train.actor_weight_decay,
         )
-        
-        
         self.actor_lr_type = cfg.train.actor_lr_scheduler.get("type", "cosine")
         if self.actor_lr_type == "cosine":
             self.actor_lr_scheduler = CosineAnnealingWarmupRestarts(
@@ -66,22 +62,19 @@ class TrainPPOAgent(TrainAgent):
                 warmup_steps = cfg.train.actor_lr_scheduler.warmup_steps,
                 target_lr = cfg.train.actor_lr,
                 mode='max',         # Use 'max' for rewards if they are your metric
-                min_lr = cfg.train.critic_lr_scheduler.min_lr,
-                factor=0.8, 
-                patience=8, 
+                min_lr = cfg.train.actor_lr_scheduler.min_lr,
+                factor=0.6, 
+                patience=4, 
                 threshold=20,
                 verbose=True
             )
-        
         
         self.critic_optimizer = torch.optim.AdamW(
             self.model.critic.parameters(),
             lr=cfg.train.critic_lr,
             weight_decay=cfg.train.critic_weight_decay,
         )
-        
         self.critic_lr_type = cfg.train.critic_lr_scheduler.get("type", "cosine")
-        log.info(f"critic_lr_type:{self.critic_lr_type}")
         if self.critic_lr_type == "cosine":
             self.critic_lr_scheduler = CosineAnnealingWarmupRestarts(
                 self.critic_optimizer,
@@ -97,13 +90,16 @@ class TrainPPOAgent(TrainAgent):
                 self.critic_optimizer,
                 warmup_steps = cfg.train.critic_lr_scheduler.warmup_steps,
                 target_lr = cfg.train.critic_lr,
-                min_lr = cfg.train.critic_lr_scheduler.min_lr,
                 mode='max',         # Use 'max' for rewards if they are your metric
-                factor=0.5, 
-                patience=8, 
+                min_lr = cfg.train.critic_lr_scheduler.min_lr,
+                factor=0.6, 
+                patience=4, 
                 threshold=20,
                 verbose=True
             )
+        
+        self.visualize_lr(cfg)
+        
         
         # Generalized advantage estimation
         self.gae_lambda: float = cfg.train.get("gae_lambda", 0.95)
@@ -139,6 +135,27 @@ class TrainPPOAgent(TrainAgent):
         self.total_steps = self.n_steps * self.n_envs # total number of actions
         self.buffer = None
 
+    def visualize_lr(self, cfg):
+        steps = []
+        critic_lrs = []
+        actor_lrs = []
+        for step in range(cfg.train.n_train_itr):
+            self.actor_lr_scheduler.step()
+            self.critic_lr_scheduler.step()
+            steps.append(step)
+            critic_lrs.append(self.critic_optimizer.param_groups[0]["lr"])
+            actor_lrs.append(self.actor_optimizer.param_groups[0]["lr"])
+        import matplotlib.pyplot as plt
+        plt.subplot(1,2,1)
+        plt.plot(steps, actor_lrs, label='actor', color = 'blue')
+        plt.legend(loc='upper right')
+        plt.subplot(1,2,2)
+        plt.plot(steps, critic_lrs,label='critic', color='red')
+        plt.legend(loc='upper right')
+        lr_save_path = os.path.join(self.checkpoint_dir, 'test_lr_schedulers.png')
+        plt.savefig(lr_save_path)
+        log.info(f"learning rate saved to {lr_save_path}")
+        
     def reset_actor_optimizer(self):
         """Not used anywhere currently"""
         new_optimizer = torch.optim.AdamW(
@@ -166,7 +183,7 @@ class TrainPPOAgent(TrainAgent):
         self.critic_lr_scheduler.step()
         if self.itr >= self.n_critic_warmup_itr: 
             self.actor_lr_scheduler.step()
-        log.info(f"""learning rate updated. actor_lr={self.actor_optimizer.param_groups[0]["lr"]}, critic_lr={self.critic_optimizer.param_groups[0]["lr"]}""")
+        log.info(f"""learning rate updated. actor_lr={self.actor_optimizer.param_groups[0]["lr"]:.2e}, critic_lr={self.critic_optimizer.param_groups[0]["lr"]:.2e}""")
     
     ########################################################################
     # appended by Tonghe

@@ -48,6 +48,7 @@ class TrainPPOFlowAgent(TrainPPOAgent):
             reward_scale_const=self.reward_scale_const,
             device=self.device,
         )
+        
     def adjust_finetune_schedule(self):
         pass
     
@@ -61,7 +62,6 @@ class TrainPPOFlowAgent(TrainPPOAgent):
             action_samples, logprob_venv  = self.model.get_actions(cond, eval_mode=self.eval_mode, save_chains=save_chains, normalize_time_horizon=normalize_time_horizon, normalize_dimension=normalize_dimension)
             return action_samples.cpu().numpy(), logprob_venv.cpu().numpy()  if ret_device=='cpu' else logprob_venv
         
-    
     def get_value(self, cond:dict, device='cpu'):
         # cond contains a floating-point torch.tensor on self.device
         if device == 'cpu':
@@ -215,6 +215,8 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 self.cnt_train_step+= self.n_envs * self.act_steps if not self.eval_mode else 0
             self.buffer.summarize_episode_reward()
 
+            
+            
             if not self.eval_mode:
                 self.buffer.update(obs_venv, self.model.critic) # for gpu version, add device=self.device
                 self.agent_update()

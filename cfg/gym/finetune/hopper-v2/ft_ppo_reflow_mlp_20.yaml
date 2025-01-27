@@ -102,7 +102,7 @@ model:
   critic:
     _target_: model.common.critic.CriticObs
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
-    mlp_dims: [128, 256, 128]
+    mlp_dims: [256, 256, 256]
     activation_type: Mish
     residual_style: True
   actor_policy_path: ${base_policy_path}
@@ -126,5 +126,6 @@ model:
   denoised_clip_value: 1.0
   max_logprob_denoising_std: 1.0    #new stuff
   time_dim_explore: 16              # new stuff
+  learn_explore_time_embedding: False
   learn_explore_noise_from: ${denoising_steps}       # new stuff. when selected as denoising steps, same as fix all noise.
   init_time_embedding: True
