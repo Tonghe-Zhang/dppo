@@ -197,7 +197,11 @@ class TrainPPOAgent(TrainAgent):
                 )
     def set_model_mode(self):
         # Define train or eval - all envs restart
-        self.eval_mode = self.itr % self.val_freq == 0 and not self.force_train
+        if self.resume:
+            self.eval_mode = True
+            self.resume = False
+        else:
+            self.eval_mode = self.itr % self.val_freq == 0 and not self.force_train
         self.model.eval() if self.eval_mode else self.model.train()
         self.last_itr_eval = self.eval_mode
     def prepare_run(self):

@@ -4,12 +4,11 @@ from torch import nn
 import copy
 import torch.nn.functional as F
 from torch import Tensor
-from typing import Tuple, List
 log = logging.getLogger(__name__)
-from flow.mlp_flow import NoisyFlowMLP, FlowMLP
-
 from collections import namedtuple
 from torch.distributions.normal import Normal
+from typing import Tuple, List
+from flow.mlp_flow import NoisyFlowMLP, FlowMLP
 
 Sample = namedtuple("Sample", "trajectories chains")
 
@@ -56,7 +55,6 @@ class PPOFlow(nn.Module):
         for param in self.actor_old.parameters():
             param.requires_grad = False             # don't train this copy, just use it to load checkpoint. 
         
-
         policy_copy = copy.deepcopy(self.actor_old)
         for param in policy_copy.parameters():
             param.requires_grad = True
@@ -112,8 +110,7 @@ class PPOFlow(nn.Module):
         log.info(f"self.actor_ft={self.actor_ft}")
         log.info(f"self.critic={self.critic}")
         
-        
-        
+    
     def check_gradient_flow(self):
         print(f"{next(self.actor_ft.policy.parameters()).requires_grad}") #True
         print(f"{next(self.actor_ft.mlp_logvar.parameters()).requires_grad}")#True
@@ -127,17 +124,20 @@ class PPOFlow(nn.Module):
         )
     
     def load_policy(self, network_path, use_ema=False):
+        print(f"loading policy from %s" % network_path)
         if network_path:
             model_data = torch.load(network_path, map_location=self.device, weights_only=True)
             actor_network_data = {k.replace("network.", ""): v for k, v in model_data["model"].items()}
-            ema_actor_network_data = {k.replace("network.", ""): v for k, v in model_data["ema"].items()}
-            print(f"actor_network_data={actor_network_data.keys()}")
-            if not use_ema:
-                self.actor_old.load_state_dict(actor_network_data)
-                logging.info("Loaded actor policy from %s", network_path)
-            else: 
+            if use_ema:
+                ema_actor_network_data = {k.replace("network.", ""): v for k, v in model_data["ema"].items()}
                 self.actor_old.load_state_dict(ema_actor_network_data)
                 logging.info("Loaded ema actor policy from %s", network_path)
+            else:
+                self.actor_old.load_state_dict(actor_network_data)
+                logging.info("Loaded actor policy from %s", network_path)
+            print(f"actor_network_data={actor_network_data.keys()}")
+        else:
+            logging.warning("No actor policy path provided. Not loading any actor policy. Start from randomly initialized policy.")
         
     def get_logprobs(self, cond:dict, x_chain:Tensor, 
                      get_entropy =False, 

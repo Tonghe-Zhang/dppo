@@ -19,6 +19,7 @@ class TrainPPOFlowAgent(TrainPPOAgent):
     def __init__(self, cfg):
         super().__init__(cfg)
         # Reward horizon --- always set to act_steps for now
+        
         self.reward_horizon = cfg.get("reward_horizon", self.act_steps)
         self.ft_denoising_steps = self.model.ft_denoising_steps
         self.normalize_entropy_logprob_dim = True   # normalize entropy and logprobability over horizon steps and action dimension. so that we don't need to adjust entropy coeff when env scales up. 
@@ -53,6 +54,21 @@ class TrainPPOFlowAgent(TrainPPOAgent):
     def adjust_finetune_schedule(self):
         pass
     
+    def resume_training(self):
+        log.info(f"Resuming training...")
+        data = torch.load(self.resume_path, weights_only=True)
+        self.itr = data["itr"]
+        self.cnt_train_step = self.n_envs * self.act_steps * self.itr if 'cnt_train_step' not in data.keys() else data["cnt_train_step"]
+        
+        if "model_full" in data.keys():
+            self.model.load_state_dict(data["model_full"])
+        elif "model" in data.keys():
+            self.model.load_state_dict(data["model"])
+        self.actor_optimizer.load_state_dict(data["actor_optimizer"])
+        self.critic_optimizer.load_state_dict(data["critic_optimizer"])
+        log.info(f"Resume training from itr={self.itr}, total train steps={self.cnt_train_step}.")
+        log.info(f"Model loaded from path={self.resume_path}")
+        
     # overload...
     def save_model(self):
         """
@@ -64,11 +80,12 @@ class TrainPPOFlowAgent(TrainPPOAgent):
         
         data = {
             "itr": self.itr,
+            "cnt_train_steps": self.cnt_train_step,
             "model": {'network.'+key :value for key, value in policy_state_dict.items()},
             "model_full": self.model.state_dict(),
             "actor_optimizer": self.actor_optimizer.state_dict(),
             "critic_optimizer": self.critic_optimizer.state_dict(),
-        }        
+        }
         # when you load state_dict to resume training, use model_full. when you load state_dict for eval, load model.
         
         
@@ -89,8 +106,7 @@ class TrainPPOFlowAgent(TrainPPOAgent):
             torch.save(data, os.path.join(self.checkpoint_dir, save_path))
             log.info(f"\n Saved model with the highest evaluated average episode reward {self.current_best_reward:4.3f} to \n{save_path}\n ")
             self.is_best_so_far =False
-            
-            
+
     @torch.no_grad()
     def get_samples_logprobs(self, cond:dict, ret_device='cpu', save_chains=True, normalize_time_horizon=False, normalize_dimension=False):
         # returns: action_samples are still numpy because mujoco engine receives np.
@@ -232,6 +248,8 @@ class TrainPPOFlowAgent(TrainPPOAgent):
     def run(self):
         self.prepare_run()
         self.buffer.reset() # as long as we put items at the right position in the buffer (determined by 'step'), the buffer automatically resets when new iteration begins (step =0). so we only need to reset in the beginning. This works only for PPO buffer, otherwise may need to reset when new iter begins.
+        if self.resume:
+            self.resume_training()
         while self.itr < self.n_train_itr:
             self.prepare_video_path()
             self.set_model_mode()
