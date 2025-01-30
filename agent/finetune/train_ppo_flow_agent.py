@@ -3,6 +3,7 @@ DPPO fine-tuning.
 run this line to finetune hopper-v2: 
 python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp device=cuda:7 wandb=null
 """
+import os
 import logging
 log = logging.getLogger(__name__)
 from tqdm import tqdm as tqdm
@@ -52,6 +53,44 @@ class TrainPPOFlowAgent(TrainPPOAgent):
     def adjust_finetune_schedule(self):
         pass
     
+    # overload...
+    def save_model(self):
+        """
+        overload. 
+        saves model to disk; no ema recorded. 
+        TODO: save ema
+        """
+        policy_state_dict = self.model.actor_ft.policy.state_dict()
+        
+        data = {
+            "itr": self.itr,
+            "model": {'network.'+key :value for key, value in policy_state_dict.items()},
+            "model_full": self.model.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "critic_optimizer": self.critic_optimizer.state_dict(),
+        }        
+        # when you load state_dict to resume training, use model_full. when you load state_dict for eval, load model.
+        
+        
+        # always save the last model for resume of training. 
+        save_path = os.path.join(self.checkpoint_dir,f"last.pt")
+        torch.save(data, os.path.join(self.checkpoint_dir, save_path))
+        # log.info(f"\n Saved last model at itr {self.itr} to {save_path}\n ")
+        
+        # optionally save intermediate models
+        if self.itr % self.save_model_freq == 0 or self.itr == self.n_train_itr - 1:
+            save_path = os.path.join(self.checkpoint_dir, f"state_{self.itr}.pt")
+            torch.save(data, os.path.join(self.checkpoint_dir, save_path))
+            log.info(f"\n Saved model at itr={self.itr} to {save_path}\n ")
+        
+        # save the best model evaluated so far 
+        if self.is_best_so_far:
+            save_path = os.path.join(self.checkpoint_dir,f"best.pt")
+            torch.save(data, os.path.join(self.checkpoint_dir, save_path))
+            log.info(f"\n Saved model with the highest evaluated average episode reward {self.current_best_reward:4.3f} to \n{save_path}\n ")
+            self.is_best_so_far =False
+            
+            
     @torch.no_grad()
     def get_samples_logprobs(self, cond:dict, ret_device='cpu', save_chains=True, normalize_time_horizon=False, normalize_dimension=False):
         # returns: action_samples are still numpy because mujoco engine receives np.
@@ -78,16 +117,18 @@ class TrainPPOFlowAgent(TrainPPOAgent):
             super().update_lr()
     
     def update_lr_adaptive_kl(self, approx_kl):
-        min_lr = 1e-20
-        max_lr = 1e-2
+        min_actor_lr = 1e-5
+        max_actor_lr = 5e-4
+        min_critic_lr = 1e-5
+        max_critic_lr = 1e-3
         tune='maintains'
         if approx_kl > self.target_kl * 2.0:
-            self.actor_lr = max(min_lr, self.actor_lr / 1.5)
-            self.critic_lr = max(min_lr, self.critic_lr / 1.5)
+            self.actor_lr = max(min_actor_lr, self.actor_lr / 1.5)
+            self.critic_lr = max(min_critic_lr, self.critic_lr / 1.5)
             tune = 'decreases'
         elif 0.0 < approx_kl and approx_kl < self.target_kl / 2.0:
-            self.actor_lr = min(max_lr, self.actor_lr * 1.5)
-            self.critic_lr = min(max_lr, self.critic_lr * 1.5)
+            self.actor_lr = min(max_actor_lr, self.actor_lr * 1.5)
+            self.critic_lr = min(max_critic_lr, self.critic_lr * 1.5)
             tune = 'increases'
         for actor_param_group, critic_param_group in zip(self.actor_optimizer.param_groups, self.critic_optimizer.param_groups):
             actor_param_group["lr"] = self.actor_lr
@@ -215,8 +256,6 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 self.cnt_train_step+= self.n_envs * self.act_steps if not self.eval_mode else 0
             self.buffer.summarize_episode_reward()
 
-            
-            
             if not self.eval_mode:
                 self.buffer.update(obs_venv, self.model.critic) # for gpu version, add device=self.device
                 self.agent_update()

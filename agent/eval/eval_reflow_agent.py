@@ -3,24 +3,18 @@ Evaluate pre-trained/DPPO-fine-tuned diffusion policy.
 self.model: Flow
 
 """
+import matplotlib.pyplot as plt
 from tqdm import tqdm as tqdm
 import os
 import numpy as np
 import torch
 import logging
-
+from util.process import read_eval_statistics
 log = logging.getLogger(__name__)
 from util.timer import Timer
 from agent.eval.eval_agent import EvalAgent
 from model.flow.reflow import ReFlow
-
-def current_time():
-    from datetime import datetime
-    # Get current time
-    now = datetime.now()
-    # Format the time to the desired pattern
-    formatted_time = now.strftime("%y-%m-%d-%H-%M-%S")
-    return formatted_time
+from util.timer import current_time
         
 class EvalReFlowAgent(EvalAgent):
     def __init__(self, cfg):
@@ -29,6 +23,9 @@ class EvalReFlowAgent(EvalAgent):
         self.cfg=cfg
         self.base_policy_path=cfg.base_policy_path
         self.eval_log_dir=None
+        self.denoising_step_list = cfg.get('denoising_step_list', [1,2,4,8,16,20,32,64]) #[20] #[1, 3, 4, 8, 16, 20, 32, 64]
+        self.denoising_step_train = cfg.denoising_steps
+    
     def get_traj_length(self, episodes_start_end):
         """
         Calculates the average value of end - start for a list of tuples.
@@ -41,13 +38,15 @@ class EvalReFlowAgent(EvalAgent):
         """
         total = 0
         count = len(episodes_start_end)
-        
+        episode_length = []
         for episode in episodes_start_end:
             _, start, end = episode  # Unpacking the tuple
             total += (end - start)
+            episode_length.append(end - start)
 
         traj_length = total / count if count > 0 else 0  # Avoid division by zero
-        return traj_length
+        traj_std = np.std(episode_length) if count > 0 else 0
+        return traj_length, traj_std
     
     def run(self):
         # Start training loop
@@ -58,11 +57,10 @@ class EvalReFlowAgent(EvalAgent):
         self.direct_plot =False #True
         if self.direct_plot:
             eval_statistics_path = '/home/zhangtonghe/dppo/agent/eval/visualize/flow/25-01-13-12-19-21/eval_statistics.npz'
-            statistics = self.read_eval_statistics(npz_file_path=eval_statistics_path)
+            statistics = read_eval_statistics(npz_file_path=eval_statistics_path)
             self.plot_eval_statistics(statistics, self.eval_log_dir)
             return
         
-        self.denoising_steps = [20] #[1, 3, 4, 8, 16, 20, 32, 64]
         # Prepare video paths for each envs --- only applies for the first set of episodes if allowing reset within iteration and each iteration has multiple episodes from one env
         options_venv = [{} for _ in range(self.n_envs)]
         if self.render_video:
@@ -73,26 +71,35 @@ class EvalReFlowAgent(EvalAgent):
         ####################################################################################
         self.model: ReFlow
         data = torch.load(self.base_policy_path, weights_only=True)
-        epoch = data["epoch"]
+        
+        if 'model' in data.keys():
+            if 'network' in data["model"].keys():
+                self.model.load_state_dict(data["model"])
+            else:
+                actor_policy_state_dict = {key.replace('actor_ft.policy.', 'network.'): value 
+                                      for key, value in data["model"].items() 
+                                      if key.startswith('actor_ft.policy.')}
+                self.model.load_state_dict(actor_policy_state_dict)
+        else:
+            raise ValueError(f"your state dictionary is not correct, it does not contain key: model")
         # self.model.load_state_dict(data["ema"])
-        self.model.load_state_dict(data["model"])    #
         # self.ema_model.load_state_dict(data["ema"])
         print(f"Loaded dict from {self.base_policy_path}")
         ####################################################################################
         
-        
-        denoising_steps_set = self.denoising_steps
-        import matplotlib.pyplot as plt
+        denoising_steps_set = self.denoising_step_list
         # Lists to store the results
         num_denoising_steps_list = []
         avg_single_step_freq_list = []
         avg_single_step_freq_std_list = []
         avg_traj_length_list = []
+        avg_traj_length_std_list = []
         avg_episode_reward_list = []
         avg_episode_reward_std_list=[]
         avg_best_reward_list=[]
         avg_best_reward_std_list = []
         success_rate_list = []
+        success_rate_std_list=[]
         num_episodes_finished_list=[]
         
         for num_denoising_steps in denoising_steps_set:
@@ -101,31 +108,41 @@ class EvalReFlowAgent(EvalAgent):
             # Unpack the result tuple
             
             num_denoising_steps, avg_single_step_freq, avg_single_step_freq_std, \
-                avg_traj_length, avg_episode_reward, avg_episode_reward_std, \
-                    avg_best_reward, avg_best_reward_std, num_episodes_finished, success_rate = result
+                avg_traj_length, avg_traj_length_std, avg_episode_reward, avg_episode_reward_std, \
+                    avg_best_reward, avg_best_reward_std, num_episodes_finished, success_rate, success_rate_std= result
             # Store the relevant results
             num_denoising_steps_list.append(num_denoising_steps)
+            
             avg_single_step_freq_list.append(avg_single_step_freq)
             avg_single_step_freq_std_list.append(avg_single_step_freq_std)
+            
             avg_traj_length_list.append(avg_traj_length)
+            avg_traj_length_std_list.append(avg_traj_length_std)
+            
             avg_episode_reward_list.append(avg_episode_reward)
-            avg_best_reward_list.append(avg_best_reward)
             avg_episode_reward_std_list.append(avg_episode_reward_std)
+            
+            avg_best_reward_list.append(avg_best_reward)
             avg_best_reward_std_list.append(avg_best_reward_std)
+            
             success_rate_list.append(success_rate)
+            success_rate_std_list.append(success_rate_std)
+            
             num_episodes_finished_list.append(num_episodes_finished)
-
+        
         # save evaluation statistics as an npz
         dtype = [
             ('num_denoising_steps', int),
             ('avg_single_step_freq', float),
             ('avg_single_step_freq_std', float),
             ('avg_traj_length', float),
+            ('avg_traj_length_std', float),
             ('avg_episode_reward', float),
             ('avg_best_reward', float),
             ('avg_episode_reward_std', float),
             ('avg_best_reward_std', float),
             ('success_rate', float),
+            ('success_rate_std', float),
             ('num_episodes_finished', int)
         ]
 
@@ -134,11 +151,13 @@ class EvalReFlowAgent(EvalAgent):
         data['avg_single_step_freq'] = avg_single_step_freq_list
         data['avg_single_step_freq_std'] = avg_single_step_freq_std_list
         data['avg_traj_length'] = avg_traj_length_list
+        data['avg_traj_length_std'] = avg_traj_length_std_list
         data['avg_episode_reward'] = avg_episode_reward_list
         data['avg_best_reward'] = avg_best_reward_list
         data['avg_episode_reward_std'] = avg_episode_reward_std_list
         data['avg_best_reward_std'] = avg_best_reward_std_list
         data['success_rate'] = success_rate_list
+        data['success_rate_std'] = success_rate_std_list
         data['num_episodes_finished'] = num_episodes_finished_list
 
         # Save the structured array to a file
@@ -146,44 +165,15 @@ class EvalReFlowAgent(EvalAgent):
         np.savez(eval_statistics_path, data=data)
         
         # read out and plot
-        statistics = self.read_eval_statistics(npz_file_path=eval_statistics_path)
+        statistics = read_eval_statistics(npz_file_path=eval_statistics_path)
         self.plot_eval_statistics(statistics, self.eval_log_dir)
     
-
-
-    def read_eval_statistics(self, npz_file_path):
-        import numpy as np
-        import os
-
-        # Load the .npz file
-        loaded_data = np.load(npz_file_path)
-
-        # Extract the structured array
-        data = loaded_data['data']
-
-        # Extract individual lists
-        num_denoising_steps_list = data['num_denoising_steps']
-        avg_single_step_freq_list= data['avg_single_step_freq']
-        avg_single_step_freq_std_list = data['avg_single_step_freq_std']
-        avg_traj_length_list = data['avg_traj_length']
-        avg_episode_reward_list = data['avg_episode_reward']
-        avg_best_reward_list = data['avg_best_reward']
-        avg_episode_reward_std_list = data['avg_episode_reward_std']
-        avg_best_reward_std_list = data['avg_best_reward_std']
-        success_rate_list = data['success_rate']
-        num_episodes_finished_list = data['num_episodes_finished']
-        
-        # return all these list
-        eval_statistics=(num_denoising_steps_list, avg_single_step_freq_list, avg_single_step_freq_std_list, \
-            avg_traj_length_list, avg_episode_reward_list, avg_best_reward_list, \
-                avg_episode_reward_std_list, avg_best_reward_std_list, \
-                    success_rate_list, num_episodes_finished_list)
-        return eval_statistics
-    
     def plot_eval_statistics(self, eval_statistics, log_dir:str):
-        num_denoising_steps_list, avg_single_step_freq_list, avg_single_step_freq_std_list, avg_traj_length_list, avg_episode_reward_list, avg_best_reward_list, avg_episode_reward_std_list, avg_best_reward_std_list, success_rate_list, num_episodes_finished_list = eval_statistics
-        import matplotlib.pyplot as plt
-        import os
+        num_denoising_steps_list, avg_single_step_freq_list, avg_single_step_freq_std_list, \
+            avg_traj_length_list, avg_traj_length_std_list, avg_episode_reward_list, avg_traj_length_list, \
+                avg_episode_reward_std_list, avg_traj_length_std_list, success_rate_list, success_rate_std_list, \
+                num_episodes_finished_list = eval_statistics
+        
         # Plotting
         plt.figure(figsize=(12, 8))
 
@@ -194,9 +184,9 @@ class EvalReFlowAgent(EvalAgent):
                     [avg_episode - std for avg_episode, std in zip(avg_episode_reward_list, avg_episode_reward_std_list)],
                     [avg_episode + std for avg_episode, std in zip(avg_episode_reward_list, avg_episode_reward_std_list)],
                     color='b', alpha=0.2, label='Std Dev')
-        plt.title('Average Episode Reward ')
+        plt.title('Episode Reward ')
         plt.xlabel('Number of Denoising Steps')
-        plt.ylabel('Average Episode Reward')
+        plt.ylabel('Episode Reward')
         # plt.ylim([0, 1750])
         plt.grid(True)
         plt.legend()
@@ -204,23 +194,27 @@ class EvalReFlowAgent(EvalAgent):
         # Plot average trajectory length
         plt.subplot(2, 3, 2)
         plt.semilogx(num_denoising_steps_list, avg_traj_length_list, marker='o', label='Avg Trajectory Length', color='r')
-        plt.title('Average Trajectory Length ')
+        plt.fill_between(num_denoising_steps_list,
+                    [traj - std for traj, std in zip(avg_traj_length_list, avg_traj_length_std_list)],
+                    [traj + std for traj, std in zip(avg_traj_length_list, avg_traj_length_std_list)],
+                    color='r', alpha=0.2, label='Std Dev')
+        plt.title('Trajectory Length ')
         plt.xlabel('Number of Denoising Steps')
-        plt.ylabel('Average Trajectory Length')
+        plt.ylabel('Trajectory Length')
         # plt.ylim() #[10, 120]
         plt.grid(True)
         plt.legend()
 
         # Plot average best reward with shading
         plt.subplot(2, 3, 4)
-        plt.semilogx(num_denoising_steps_list, avg_best_reward_list, marker='o', label='Avg Best Reward', color='g')
+        plt.semilogx(num_denoising_steps_list, avg_traj_length_list, marker='o', label='Avg Best Reward', color='g')
         plt.fill_between(num_denoising_steps_list,
-                    [avg_best - std for avg_best, std in zip(avg_best_reward_list, avg_best_reward_std_list)],
-                    [avg_best + std for avg_best, std in zip(avg_best_reward_list, avg_best_reward_std_list)],
+                    [avg_best - std for avg_best, std in zip(avg_traj_length_list, avg_traj_length_std_list)],
+                    [avg_best + std for avg_best, std in zip(avg_traj_length_list, avg_traj_length_std_list)],
                     color='g', alpha=0.2, label='Std Dev')
-        plt.title('Average Best Reward ')
+        plt.title('Best Reward ')
         plt.xlabel('Number of Denoising Steps')
-        plt.ylabel('Average Best Reward')
+        plt.ylabel('Best Reward')
         # plt.ylim([0, 6])
         plt.grid(True)
         plt.legend()
@@ -228,6 +222,10 @@ class EvalReFlowAgent(EvalAgent):
         # Plot success rate
         plt.subplot(2, 3, 5)
         plt.semilogx(num_denoising_steps_list, success_rate_list, marker='o', label='Success Rate', color='y')
+        plt.fill_between(num_denoising_steps_list,
+                    [succ - std for succ, std in zip(success_rate_list, success_rate_std_list)],
+                    [succ + std for succ, std in zip(success_rate_list, success_rate_std_list)],
+                    color='y', alpha=0.2, label='Std Dev')
         plt.title('Success Rate ')
         plt.xlabel('Number of Denoising Steps')
         plt.ylabel('Success Rate')
@@ -368,15 +366,19 @@ class EvalReFlowAgent(EvalAgent):
             success_rate = np.mean(
                 episode_best_reward >= self.best_reward_threshold_for_success
             )
-
+            success_rate_std = np.std(
+                episode_best_reward >= self.best_reward_threshold_for_success
+            )
         else:
             episode_reward = np.array([])
             num_episodes_finished = 0
             avg_episode_reward = 0
             avg_best_reward = 0
             success_rate = 0
+            success_rate_std = 0
             log.info("[WARNING] No episode completed within the iteration!")
-        avg_traj_length=self.get_traj_length(episodes_start_end)
+        
+        avg_traj_length, avg_traj_length_std=self.get_traj_length(episodes_start_end)
         # Log loss and save metrics
         
         
@@ -385,7 +387,7 @@ class EvalReFlowAgent(EvalAgent):
         single_step_frequency_list = 1/single_step_duration_list
         
         avg_single_step_freq =single_step_frequency_list.mean()
-        avg_single_step_freq_std =single_step_frequency_list.std()
+        single_step_freq_std =single_step_frequency_list.std()
         ##################################################################################################################################
         
         log.info(
@@ -394,19 +396,19 @@ class EvalReFlowAgent(EvalAgent):
             env:                 {self.env_name}
             model:               {self.model.__class__.__name__}
             denois_step:         {num_denoising_steps}
-            single_step_freq:    {avg_single_step_freq:3.2f} ± {avg_single_step_freq_std:3.2f} HZ
-            traj_length:         {avg_traj_length:8.1f}
+            single_step_freq:    {avg_single_step_freq:3.2f} ± {single_step_freq_std:3.2f} HZ
+            traj_length:         {avg_traj_length:8.1f} ± {avg_traj_length_std:3.2f} HZ
             episode_reward:      {avg_episode_reward:8.1f} ± {avg_episode_reward_std:2.1f}
             best_reward:         {avg_best_reward:8.1f} ± {avg_best_reward_std:2.1f}
-            success_rate:        {success_rate*100:8.2f} %
+            success_rate:        {success_rate*100:8.2f} ± {success_rate_std*100:8.2f}%
             ########################################
             """
             )
 
         
         return num_denoising_steps, \
-            avg_single_step_freq, avg_single_step_freq_std,\
-            avg_traj_length, \
+            avg_single_step_freq, single_step_freq_std,\
+            avg_traj_length, avg_traj_length_std, \
             avg_episode_reward, avg_episode_reward_std, \
             avg_best_reward, avg_best_reward_std, \
-            num_episodes_finished, success_rate
+            num_episodes_finished, success_rate, success_rate_std

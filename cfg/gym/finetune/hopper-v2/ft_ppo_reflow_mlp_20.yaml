@@ -52,18 +52,18 @@ train:
 
   actor_lr_scheduler:
     type: cosine
-    first_cycle_steps: 100    #1000    #
+    first_cycle_steps: 1000    # 100
     warmup_steps: 10
-    min_lr: 2e-5
+    min_lr: ${train.actor_lr}
 
-  critic_lr: 7e-4
+  critic_lr: 5e-4
   critic_weight_decay: 1e-5
 
   critic_lr_scheduler:
     type: cosine
-    first_cycle_steps: 100    #1000
+    first_cycle_steps: 1000    # 100
     warmup_steps: 10
-    min_lr: 5e-4
+    min_lr: ${train.critic_lr}
 
   save_model_freq: 100
   val_freq: 10
@@ -75,15 +75,15 @@ train:
   reward_scale_running: True
   reward_scale_const: 1.0
   gae_lambda: 0.95
-  batch_size: 20_000        # 10_000 #50000
+  batch_size: 20_000        # 10_000
   update_epochs: 5
   vf_coef: 0.5
-  ent_coef: -0.5            #0.01
+  ent_coef: -0.1            #0.01
 
-  target_kl: 1.0            #1.0
-  lr_schedule: fixed
+  target_kl: 2.0e-5         #1.0
+  lr_schedule: fixed  #adaptive_kl     #
 
-  # max_grad_norm: 1.0      #1.0
+  max_grad_norm: 0.4        #1.0
 
 model:
   _target_: model.flow.ft_ppo.ppoflow.PPOFlow
@@ -102,7 +102,7 @@ model:
   critic:
     _target_: model.common.critic.CriticObs
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
-    mlp_dims: [256, 256, 256]
+    mlp_dims: [512, 512, 512] #[256, 256, 256]   #
     activation_type: Mish
     residual_style: True
   actor_policy_path: ${base_policy_path}
@@ -115,17 +115,17 @@ model:
   noise_scheduler_type: lin         #vp
   inference_steps: ${denoising_steps}
   randn_clip_value: 3
-  min_sampling_denoising_std: 0.08  #0.1
-  min_logprob_denoising_std: 0.08   #0.1 #1e-20 makes actor loss goes to nan, not sure why yet.
-  logprob_min: -0.5                 #new stuff
-  logprob_max: 1.2                  #new stuff  this value only works for 4 steps. 
+  min_sampling_denoising_std: 0.08  # 0.1
+  min_logprob_denoising_std: 0.08   # 0.1 #1e-20 makes actor loss goes to nan, not sure why yet.
+  logprob_min: -10                  # new stuff
+  logprob_max: 10                   # new stuff  this value only works for 4 steps. 
   clip_ploss_coef: 0.01
   clip_ploss_coef_base: 0.01
   clip_ploss_coef_rate: 3
   clip_vloss_coef: null
   denoised_clip_value: 1.0
-  max_logprob_denoising_std: 1.0    #new stuff
-  time_dim_explore: 16              # new stuff
+  max_logprob_denoising_std: 0.5    # new stuff
+  time_dim_explore: 128             # new stuff
   learn_explore_time_embedding: False
   learn_explore_noise_from: ${denoising_steps}       # new stuff. when selected as denoising steps, same as fix all noise.
   init_time_embedding: True

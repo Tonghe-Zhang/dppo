@@ -3,10 +3,7 @@ Simple timer from https://github.com/jannerm/diffuser/blob/main/diffuser/utils/t
 """
 
 import time
-
-
 class Timer:
-
     def __init__(self):
         self._start = time.time()
 
@@ -16,7 +13,6 @@ class Timer:
         if reset:
             self._start = now
         return diff
-
 def sec2HMS(seconds):
     """ 
     translate duration in seconds to hour, minute, second format.
@@ -30,3 +26,13 @@ def sec2HMS(seconds):
         return f"{int(hours):02d}h:{int(minutes):02d}m:{seconds:02d}s"
     else:
         return f"{int(minutes):02d}m:{seconds:02d}s"
+
+
+# appended by Tonghe
+def current_time():
+    from datetime import datetime
+    # Get current time
+    now = datetime.now()
+    # Format the time to the desired pattern
+    formatted_time = now.strftime("%y-%m-%d-%H-%M-%S")
+    return formatted_time

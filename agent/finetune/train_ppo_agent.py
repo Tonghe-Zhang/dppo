@@ -251,6 +251,8 @@ class TrainPPOAgent(TrainAgent):
             torch.save(data, os.path.join(self.checkpoint_dir, save_path))
             log.info(f"\n Saved model with the highest evaluated average episode reward {self.current_best_reward:4.3f} to \n{save_path}\n ")
             self.is_best_so_far =False
+    
+    
     def plot_state_trajecories(self): 
         if not self.traj_plotter:
             return 
@@ -310,7 +312,7 @@ class TrainPPOAgent(TrainAgent):
                 self.critic_optimizer.step()
 
                 # Stop gradient update if KL difference reaches target
-                if self.target_kl is not None and approx_kl > self.target_kl:
+                if self.target_kl and approx_kl > self.target_kl:
                     kl_change_too_much = True
                     break
             if kl_change_too_much:

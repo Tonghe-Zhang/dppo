@@ -7,7 +7,10 @@ _target_: agent.eval.eval_reflow_agent.EvalReFlowAgent
 
 name: ${env_name}_eval_reflow_mlp_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/gym/gym-eval/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: /home/zhangtonghe/dppo/log/gym/gym-pretrain/hopper-medium-v2_pre_reflow_mlp_ta4_td20/2025-01-13_11-09-33_42/checkpoint/best.pt
+base_policy_path: /home/zhangtonghe/dppo/log/gym/gym-finetune/hopper-medium-v2_ppo_reflow_mlp_ta4_td20_flowppo_2k/2025-01-29_11-44-20_42/checkpoint/state_999.pt #best.pt  #state_999.pt
+
+# /home/zhangtonghe/dppo/log/gym/gym-pretrain/hopper-medium-v2_pre_reflow_mlp_ta4_td20/2025-01-13_11-09-33_42/checkpoint/best.pt
+
 #uniform: /home/zhangtonghe/dppo/log/gym/gym-pretrain/hopper-medium-v2_pre_reflow_mlp_ta4_td20/2025-01-13_11-09-33_42/checkpoint/best.pt
 #logitnormal: /home/zhangtonghe/dppo/log/gym/gym-pretrain/hopper-medium-v2_pre_reflow_mlp_ta4_td20/2025-01-13_11-22-39_42/checkpoint/best.pt
 #/home/zhangtonghe/dppo/log/gym-pretrain/gym-pretrain/hopper-medium-v2_pre_reflow_mlp_ta4_td20/2024-12-08_23-41-19_42/checkpoint/best.pt
