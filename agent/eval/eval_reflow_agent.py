@@ -73,12 +73,14 @@ class EvalReFlowAgent(EvalAgent):
         data = torch.load(self.base_policy_path, weights_only=True)
         
         if 'model' in data.keys():
-            if 'network' in data["model"].keys():
+            if any('network' in key for key in data["model"].keys()):
                 self.model.load_state_dict(data["model"])
             else:
                 actor_policy_state_dict = {key.replace('actor_ft.policy.', 'network.'): value 
                                       for key, value in data["model"].items() 
                                       if key.startswith('actor_ft.policy.')}
+                if actor_policy_state_dict == {}:
+                    raise ValueError(f"""no parameter starting with actor_ft.policy in ={data["model"].keys()}""")
                 self.model.load_state_dict(actor_policy_state_dict)
         else:
             raise ValueError(f"your state dictionary is not correct, it does not contain key: model")
