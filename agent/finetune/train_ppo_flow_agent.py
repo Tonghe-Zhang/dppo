@@ -50,7 +50,50 @@ class TrainPPOFlowAgent(TrainPPOAgent):
             reward_scale_const=self.reward_scale_const,
             device=self.device,
         )
-        
+    def run(self):
+        self.prepare_run()
+        self.buffer.reset() # as long as we put items at the right position in the buffer (determined by 'step'), the buffer automatically resets when new iteration begins (step =0). so we only need to reset in the beginning. This works only for PPO buffer, otherwise may need to reset when new iter begins.
+        if self.resume:
+            self.resume_training()
+        while self.itr < self.n_train_itr:
+            self.prepare_video_path()
+            self.set_model_mode()
+            self.reset_env() # for gpu version, add device=self.device
+            self.buffer.update_full_obs()
+            for step in range(self.n_steps):
+                with torch.no_grad():
+                    cond = {
+                        "state": torch.tensor(self.prev_obs_venv["state"], device=self.device, dtype=torch.float32)
+                    }
+                    value_venv = self.get_value(cond=cond) # for gpu version add , device=self.device
+                    action_samples, chains_venv, logprob_venv = self.get_samples_logprobs(cond=cond, normalize_time_horizon=self.normalize_time_horizon, normalize_dimension=self.normalize_entropy_logprob_dim) # for gpu version, add , device=self.device
+                
+                # Apply multi-step action
+                action_venv = action_samples[:, : self.act_steps]
+                obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = self.venv.step(action_venv)
+                
+                self.buffer.save_full_obs(info_venv)
+                self.buffer.add(step, self.prev_obs_venv["state"], chains_venv, reward_venv, terminated_venv, truncated_venv, value_venv, logprob_venv)
+                
+                self.prev_obs_venv = obs_venv
+                self.cnt_train_step+= self.n_envs * self.act_steps if not self.eval_mode else 0
+            self.buffer.summarize_episode_reward()
+
+            if not self.eval_mode:
+                self.buffer.update(obs_venv, self.model.critic) # for gpu version, add device=self.device
+                self.agent_update()
+            
+            self.plot_state_trajecories() #(only in D3IL)
+
+            self.update_lr()
+            
+            # update finetune scheduler of ReFlow Policy
+            self.adjust_finetune_schedule()
+            self.save_model()
+            self.log()                                          # diffusion_min_sampling_std
+            
+            self.itr += 1
+            
     def adjust_finetune_schedule(self):
         pass
     
@@ -58,6 +101,7 @@ class TrainPPOFlowAgent(TrainPPOAgent):
         log.info(f"Resuming training...")
         data = torch.load(self.resume_path, weights_only=True)
         self.itr = data["itr"]
+        self.n_train_itr += self.itr
         self.cnt_train_step = self.n_envs * self.act_steps * self.itr if 'cnt_train_step' not in data.keys() else data["cnt_train_step"]
         
         if "model_full" in data.keys():
@@ -245,46 +289,4 @@ class TrainPPOFlowAgent(TrainPPOAgent):
                 "critic lr": self.critic_optimizer.param_groups[0]["lr"],
             }
     
-    def run(self):
-        self.prepare_run()
-        self.buffer.reset() # as long as we put items at the right position in the buffer (determined by 'step'), the buffer automatically resets when new iteration begins (step =0). so we only need to reset in the beginning. This works only for PPO buffer, otherwise may need to reset when new iter begins.
-        if self.resume:
-            self.resume_training()
-        while self.itr < self.n_train_itr:
-            self.prepare_video_path()
-            self.set_model_mode()
-            self.reset_env() # for gpu version, add device=self.device
-            self.buffer.update_full_obs()
-            for step in range(self.n_steps):
-                with torch.no_grad():
-                    cond = {
-                        "state": torch.tensor(self.prev_obs_venv["state"], device=self.device, dtype=torch.float32)
-                    }
-                    value_venv = self.get_value(cond=cond) # for gpu version add , device=self.device
-                    action_samples, chains_venv, logprob_venv = self.get_samples_logprobs(cond=cond, normalize_time_horizon=self.normalize_time_horizon, normalize_dimension=self.normalize_entropy_logprob_dim) # for gpu version, add , device=self.device
-                
-                # Apply multi-step action
-                action_venv = action_samples[:, : self.act_steps]
-                obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = self.venv.step(action_venv)
-                
-                self.buffer.save_full_obs(info_venv)
-                self.buffer.add(step, self.prev_obs_venv["state"], chains_venv, reward_venv, terminated_venv, truncated_venv, value_venv, logprob_venv)
-                
-                self.prev_obs_venv = obs_venv
-                self.cnt_train_step+= self.n_envs * self.act_steps if not self.eval_mode else 0
-            self.buffer.summarize_episode_reward()
-
-            if not self.eval_mode:
-                self.buffer.update(obs_venv, self.model.critic) # for gpu version, add device=self.device
-                self.agent_update()
-            
-            self.plot_state_trajecories() #(only in D3IL)
-
-            self.update_lr()
-            
-            # update finetune scheduler of ReFlow Policy
-            self.adjust_finetune_schedule()
-            self.save_model()
-            self.log()                                          # diffusion_min_sampling_std
-            
-            self.itr += 1
+    

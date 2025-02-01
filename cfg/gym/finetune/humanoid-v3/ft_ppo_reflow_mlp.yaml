@@ -7,14 +7,16 @@ _target_: agent.finetune.train_ppo_flow_agent.TrainPPOFlowAgent
 
 name: ${env_name}_ppo_reflow_mlp_ta${horizon_steps}_td${denoising_steps}_flowppo_2k
 logdir: ${oc.env:DPPO_LOG_DIR}/gym/gym-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/gym/gym-pretrain/ant-medium-expert-v0_pre_reflow_mlp_ta4_td20/2024-12-27_11-02-30_42/checkpoint/best.pt
-normalization_path: ${oc.env:DPPO_DATA_DIR}/gym/${env_name}/normalization.npz
+base_policy_path: ${oc.env:DPPO_DATA_DIR}/gym/humanoid-v3/0.npz
+# ${oc.env:DPPO_LOG_DIR}/gym/gym-pretrain/${env_name}_pre_reflow_mlp_ta4_td20/2024-12-27_11-02-30_42/checkpoint/best.pt
+normalization_path: ${oc.env:DPPO_DATA_DIR}/gym/humanoid-v3/0.npz
+# ${oc.env:DPPO_DATA_DIR}/gym/${env_name}/normalization.npz
 
 seed: 42
-device: cuda:7
-env_name: ant-medium-expert-v0
-obs_dim: 111
-action_dim: 8
+device: cuda:5
+env_name: Humanoid
+obs_dim: 377
+action_dim: 17
 denoising_steps: 20
 cond_steps: 1
 horizon_steps: 4
@@ -102,10 +104,10 @@ model:
   critic:
     _target_: model.common.critic.CriticObs
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
-    mlp_dims: [512, 512, 512] #[256, 256, 256]   #
+    mlp_dims: [512, 512, 512]
     activation_type: Mish
     residual_style: True
-  actor_policy_path: ${base_policy_path}
+  actor_policy_path: #${base_policy_path}
   act_dim: ${action_dim}
   horizon_steps: ${horizon_steps}
   act_min: -1

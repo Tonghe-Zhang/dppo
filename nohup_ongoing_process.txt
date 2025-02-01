@@ -1,7 +1,24 @@
 
 
+1003455
+(mujoco_py) (base) zhangtonghe@eva6-zhangtonghe:~/dppo$ 
+nohup python script/run.py --config-dir=cfg/gym/finetune/ant-medium-expert-v0 --config-name=ft_ppo_reflow_mlp device=cuda:5 >ant_flow_ppo.log 2>&1 & 
+[1] 1003455
 
+986260
+nohup python script/run.py --config-dir=cfg/gym/finetune/walker2d-v2 --config-name=ft_ppo_reflow_mlp device=cuda:3 >walker_flow_ppo.log 2>&1 & 
+[1] 986260
 
+983322
+(mujoco_py) (base) zhangtonghe@eva6-zhangtonghe:~/dppo$ nohup python script/run.py --config-dir=cfg/gym/finetune/halfcheetah-v2 --config-name=ft_ppo_reflow_
+mlp device=cuda:6 >halfcheetah-flow-ppo-20.log 2>&1 & 
+[1] 983322
+
+991811
+nohup python script/run.py --config-dir=cfg/gym/finetune/hopper-v2 --config-name=ft_ppo_reflow_mlp_20_resume device=cuda:7 >hopper_flowppo_20_resume.log 2>&1 &
+[1] 991811
+
+########################################################################
 
 
 
